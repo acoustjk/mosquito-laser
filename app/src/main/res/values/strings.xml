@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">모기 레이저</string>
+    <string name="menu_title">모기 레이저</string>
+    <string name="menu_subtitle">레이저로 모기를 잡아라!</string>
+    <string name="btn_play">게임 시작</string>
+    <string name="btn_continue">이어하기</string>
+    <string name="btn_settings">설정</string>
+    <string name="stage_select_title">스테이지 선택</string>
+    <string name="world_1">🌙 월드 1: 입문</string>
+    <string name="world_2">🌆 월드 2: 도시</string>
+    <string name="world_3">🌿 월드 3: 정글</string>
+    <string name="world_4">🏭 월드 4: 공장</string>
+    <string name="world_5">🌋 월드 5: 화산</string>
+    <string name="world_6">👾 월드 6: 우주</string>
+    <string name="stage_clear">스테이지 클리어!</string>
+    <string name="stage_fail">실패!</string>
+    <string name="time_up">시간 초과!</string>
+    <string name="btn_retry">다시 시도</string>
+    <string name="btn_next">다음 스테이지</string>
+    <string name="btn_menu">메뉴로</string>
+    <string name="condition_mirror_limit">거울 %d개 이하만 사용 가능</string>
+    <string name="condition_min_reflect">최소 %d회 반사 필수</string>
+    <string name="condition_time_limit">제한 시간: %d초</string>
+    <string name="condition_forbidden">금지 구역 통과 금지</string>
+    <string name="hint_drag_mirror">거울을 드래그해서 각도를 조절하세요</string>
+    <string name="hint_laser">레이저를 모기에게 맞추세요!</string>
+    <string name="mosquito_killed">%d / %d 마리 격추!</string>
+    <string name="locked">잠김</string>
+</resources>
