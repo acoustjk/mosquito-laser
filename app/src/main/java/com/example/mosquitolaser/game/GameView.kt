@@ -34,6 +34,62 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
     private var w = 0f
     private var h = 0f
 
+    // ── Angle Dial state ──────────────────────────────────────────────────────
+    // The dial sits at the bottom-centre of the screen.
+    // It is only interactive when a mirror is selected.
+    private var dialCenterX = 0f
+    private var dialCenterY = 0f
+    private val dialRadius get() = minOf(w, h) * 0.14f
+    private val dialPanelHeight get() = dialRadius * 2.8f
+
+    // Touch tracking for the dial
+    private var dialTouching = false          // finger is on the dial
+    private var dialStartAngle = 0f           // angle at finger-down
+    private var dialStartMirrorAngle = 0f     // mirror angle at finger-down
+    private var lastDialAngleDeg = 0f         // last computed finger angle (degrees)
+
+    // ── Dial Paint objects ───────────────────────────────────────────────────
+    private val dialBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.argb(210, 10, 12, 30)
+    }
+    private val dialRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        color = Color.argb(120, 100, 140, 255)
+    }
+    private val dialAllowedArcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 10f
+        strokeCap = Paint.Cap.ROUND
+        color = Color.argb(160, 80, 200, 255)
+    }
+    private val dialNeedlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 5f
+        strokeCap = Paint.Cap.ROUND
+        color = Color.argb(255, 255, 240, 80)
+    }
+    private val dialKnobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.argb(255, 255, 240, 80)
+    }
+    private val dialTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    private val dialHintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(160, 180, 200, 255)
+        textAlign = Paint.Align.CENTER
+    }
+    private val dialLimitLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = Color.argb(100, 255, 100, 100)
+        pathEffect = DashPathEffect(floatArrayOf(6f, 4f), 0f)
+    }
+
     // Mosquito wing animation
     private var wingAngle = 0f
     private var wingDir = 1f
@@ -227,7 +283,7 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
         // Obstacles
         drawObstacles(canvas)
 
-        // Laser (bottom of stack so mirrors appear on top)
+        // Laser
         drawLaser(canvas)
 
         // Mirrors
@@ -244,6 +300,9 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
 
         // HUD
         drawHUD(canvas)
+
+        // Angle dial (drawn last so it appears on top)
+        drawAngleDial(canvas)
     }
 
     private fun drawBackground(canvas: Canvas) {
@@ -683,23 +742,144 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
         else -> "월드 $world"
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  ANGLE DIAL
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun drawAngleDial(canvas: Canvas) {
+        val selectedMirror = engine.mirrors.find { it.id == engine.selectedMirrorId }
+
+        // Always update dial centre (needed for touch hit-test)
+        dialCenterX = w / 2f
+        dialCenterY = h - dialRadius - 32f
+
+        // Panel background
+        val panelTop = h - dialPanelHeight
+        val panelRect = RectF(0f, panelTop, w, h)
+        canvas.drawRoundRect(panelRect, 24f, 24f, dialBgPaint)
+
+        if (selectedMirror == null) {
+            // No mirror selected — show hint
+            dialHintPaint.textSize = 28f
+            canvas.drawText("🕴 거울을 탭하여 선택하세요", dialCenterX, h - dialRadius * 0.8f, dialHintPaint)
+            return
+        }
+
+        val curAngle = selectedMirror.angle
+        val minA = selectedMirror.minAngle
+        val maxA = selectedMirror.maxAngle
+        val r = dialRadius
+
+        // Allowed-range arc (background track)
+        val arcRect = RectF(dialCenterX - r, dialCenterY - r, dialCenterX + r, dialCenterY + r)
+        dialAllowedArcPaint.alpha = 60
+        dialAllowedArcPaint.color = Color.argb(60, 80, 200, 255)
+        canvas.drawArc(arcRect, minA, maxA - minA, false, dialAllowedArcPaint)
+
+        // Filled arc from minAngle to currentAngle
+        dialAllowedArcPaint.alpha = 180
+        dialAllowedArcPaint.color = Color.argb(200, 80, 200, 255)
+        canvas.drawArc(arcRect, minA, curAngle - minA, false, dialAllowedArcPaint)
+
+        // Outer ring
+        dialRingPaint.strokeWidth = 2f
+        canvas.drawCircle(dialCenterX, dialCenterY, r, dialRingPaint)
+
+        // Limit lines (min / max)
+        for (limitAngle in listOf(minA, maxA)) {
+            val rad = Math.toRadians(limitAngle.toDouble())
+            canvas.drawLine(
+                dialCenterX + cos(rad).toFloat() * (r * 0.7f),
+                dialCenterY + sin(rad).toFloat() * (r * 0.7f),
+                dialCenterX + cos(rad).toFloat() * r,
+                dialCenterY + sin(rad).toFloat() * r,
+                dialLimitLinePaint
+            )
+        }
+
+        // Needle
+        val needleRad = Math.toRadians(curAngle.toDouble())
+        val nx = dialCenterX + cos(needleRad).toFloat() * (r * 0.82f)
+        val ny = dialCenterY + sin(needleRad).toFloat() * (r * 0.82f)
+        canvas.drawLine(dialCenterX, dialCenterY, nx, ny, dialNeedlePaint)
+
+        // Knob at needle tip
+        dialKnobPaint.maskFilter = BlurMaskFilter(6f, BlurMaskFilter.Blur.NORMAL)
+        canvas.drawCircle(nx, ny, 10f, dialKnobPaint)
+        dialKnobPaint.maskFilter = null
+        canvas.drawCircle(nx, ny, 7f, dialKnobPaint)
+
+        // Centre dot
+        dialKnobPaint.color = Color.argb(180, 80, 200, 255)
+        canvas.drawCircle(dialCenterX, dialCenterY, 8f, dialKnobPaint)
+        dialKnobPaint.color = Color.argb(255, 255, 240, 80)
+
+        // Angle value text
+        dialTextPaint.textSize = 38f
+        canvas.drawText("${curAngle.toInt()}°", dialCenterX, dialCenterY + r + 48f, dialTextPaint)
+
+        // Mirror ID label
+        dialHintPaint.textSize = 22f
+        canvas.drawText("거울 #${selectedMirror.id}  [${minA.toInt()}° ~ ${maxA.toInt()}°]",
+            dialCenterX, panelTop + 28f, dialHintPaint)
+
+        // Drag hint arrows (←  →)
+        dialHintPaint.textSize = 26f
+        canvas.drawText("◀  드래그하여 회전  ▶", dialCenterX, dialCenterY + r + 80f, dialHintPaint)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  TOUCH HANDLING  (two zones: game field + dial)
+    // ─────────────────────────────────────────────────────────────────────────
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        val normX = event.x / w
-        val normY = event.y / h
+        val ex = event.x
+        val ey = event.y
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (engine.onTouchDown(normX, normY)) {
-                    soundManager.playMirrorRotate()
+                val inDialZone = ey > h - dialPanelHeight
+
+                if (inDialZone && engine.selectedMirrorId != -1) {
+                    // Start dial rotation
+                    dialTouching = true
+                    lastDialAngleDeg = Math.toDegrees(
+                        atan2((ey - dialCenterY).toDouble(), (ex - dialCenterX).toDouble())
+                    ).toFloat()
+                    val mirror = engine.mirrors.find { it.id == engine.selectedMirrorId }
+                    dialStartMirrorAngle = mirror?.angle ?: 0f
+                    dialStartAngle = lastDialAngleDeg
+                } else if (!inDialZone) {
+                    // Tap on game field — select / deselect mirror
+                    val normX = ex / w
+                    val normY = ey / h
+                    val selected = engine.onTouchDown(normX, normY)
+                    if (selected) soundManager.playMirrorRotate()
                 }
                 return true
             }
+
             MotionEvent.ACTION_MOVE -> {
-                engine.onTouchMove(normX, normY)
+                if (dialTouching) {
+                    val fingerAngle = Math.toDegrees(
+                        atan2((ey - dialCenterY).toDouble(), (ex - dialCenterX).toDouble())
+                    ).toFloat()
+
+                    // Delta from the initial touch point, applied to initial mirror angle
+                    var delta = fingerAngle - dialStartAngle
+                    // Wrap delta to [-180, 180] to avoid jumps when crossing ±180°
+                    if (delta > 180f) delta -= 360f
+                    if (delta < -180f) delta += 360f
+
+                    val newAngle = dialStartMirrorAngle + delta
+                    engine.onDialAngleChanged(newAngle)
+                    lastDialAngleDeg = fingerAngle
+                }
                 return true
             }
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                engine.onTouchUp()
+                dialTouching = false
                 return true
             }
         }

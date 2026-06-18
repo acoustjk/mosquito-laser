@@ -134,31 +134,31 @@ class GameEngine(val stage: StageData) {
             }
 
             val dist = hypot((normX - mirror.x).toDouble(), (normY - mirror.y).toDouble()).toFloat()
-            if (dist < mirror.size + 0.06f) {
-                selectedMirrorId = mirror.id
-                return true
+            if (dist < mirror.size + 0.08f) {
+                // Toggle: tap same mirror → deselect, tap different mirror → select
+                selectedMirrorId = if (selectedMirrorId == mirror.id) -1 else mirror.id
+                return selectedMirrorId != -1
             }
         }
+        // Tap on empty space → deselect
         selectedMirrorId = -1
         return false
     }
 
-    fun onTouchMove(normX: Float, normY: Float) {
+    /** Called by the angle dial when the user rotates it. */
+    fun onDialAngleChanged(angleDeg: Float) {
         if (state != GameState.PLAYING) return
         val mirror = mirrors.find { it.id == selectedMirrorId } ?: return
-
-        val dx = normX - mirror.x
-        val dy = normY - mirror.y
-        val angle = Math.toDegrees(Math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
-        mirror.angle = angle.coerceIn(mirror.minAngle, mirror.maxAngle)
-
+        mirror.angle = angleDeg.coerceIn(mirror.minAngle, mirror.maxAngle)
         movedMirrorIds.add(mirror.id)
         mirrorsMoved = movedMirrorIds.size
-
         recalculateLaser()
     }
 
-    fun onTouchUp() { selectedMirrorId = -1 }
+    // onTouchMove is no longer used for mirror rotation (dial handles it)
+    fun onTouchMove(normX: Float, normY: Float) { /* no-op – dial controls rotation */ }
+
+    fun onTouchUp() { /* selection persists until user taps elsewhere */ }
 
     fun pause() { if (state == GameState.PLAYING) state = GameState.PAUSED }
     fun resume() { if (state == GameState.PAUSED) state = GameState.PLAYING }
