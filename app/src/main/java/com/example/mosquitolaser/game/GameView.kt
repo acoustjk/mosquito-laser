@@ -771,18 +771,24 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
             canvas.drawText("SEC", w - 20f, 75f, timerPaint)
         }
 
-        // Reflections indicator
-        if (stage.condition.hasMinReflections()) {
-            val refCount = engine.reflectionCount
-            val minRef = stage.condition.minReflections
-            val refColor = if (refCount >= minRef) Color.GREEN else Color.argb(200, 255, 200, 50)
-            val refPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = refColor
-                textSize = 24f
-                textAlign = Paint.Align.LEFT
-            }
-            canvas.drawText("↗ $refCount / $minRef", 20f, hudHeight + 30f, refPaint)
+        // Reflections & Multi-mirror Power indicator
+        val rCnt = engine.reflectionCount
+        val mult = engine.burnSpeedMultiplier
+        val refColor = if (mult > 1.0f) Color.argb(255, 255, 220, 0) else Color.argb(200, 180, 220, 255)
+
+        val refPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = refColor
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.LEFT
         }
+
+        val refText = if (mult > 1.0f) {
+            "↗ 반사 " + rCnt + "회  ⚡ SUPER BEAM (" + mult.toInt() + "x 속도!)"
+        } else {
+            "↗ 반사 " + rCnt + "회"
+        }
+        canvas.drawText(refText, 20f, hudHeight + 28f, refPaint)
 
         // Mirror limit indicator
         if (stage.condition.hasMirrorLimit()) {
@@ -794,7 +800,7 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
                 textSize = 24f
                 textAlign = Paint.Align.LEFT
             }
-            val offset = if (stage.condition.hasMinReflections()) 60f else 30f
+            val offset = 60f
             canvas.drawText("🪞 $movedCount / $maxMirrors", 20f, hudHeight + offset, mPaint)
         }
     }

@@ -97,10 +97,25 @@ class GameEngine(val stage: StageData) {
     val unusedMirrorsCount: Int
         get() = (movableMirrorsCount - mirrorsMoved).coerceAtLeast(0)
 
+    val burnSpeedMultiplier: Float
+        get() = when {
+            reflectionCount >= 3 -> 3.5f
+            reflectionCount == 2 -> 2.0f // 2 mirrors used = 2x burn speed!
+            else -> 1.0f
+        }
+
+    val reflectionBonus: Int
+        get() = when {
+            stage.mirrors.size > 1 && reflectionCount >= stage.mirrors.size -> 2500 // All mirrors used bonus!
+            reflectionCount >= 3 -> 3500
+            reflectionCount == 2 -> 1500
+            reflectionCount == 1 -> 300
+            else -> 0
+        }
+
     val efficiencyBonus: Int
         get() {
             val moveEfficiencyScore = unusedMirrorsCount * 500
-            val reflectionBonus = reflectionCount * 250
             return moveEfficiencyScore + reflectionBonus
         }
 
@@ -111,9 +126,10 @@ class GameEngine(val stage: StageData) {
         val total = totalScore
         val target3Star = baseStageScore + 1200
         val target2Star = baseStageScore + 400
+        val usedAllMirrors = stage.mirrors.size > 1 && reflectionCount >= stage.mirrors.size
 
         return when {
-            total >= target3Star || (unusedMirrorsCount > 0 && elapsedTimeMs <= 25_000L) -> 3
+            usedAllMirrors || total >= target3Star || (unusedMirrorsCount > 0 && elapsedTimeMs <= 25_000L) -> 3
             total >= target2Star || mirrorsMoved <= movableMirrorsCount -> 2
             else -> 1
         }
@@ -125,8 +141,10 @@ class GameEngine(val stage: StageData) {
         reflectionCount = result.reflectionCount
         hitForbiddenZone = result.hitForbiddenZone
 
-        // Process 3-second laser burn per mosquito
+        // Process laser burn with multi-mirror power acceleration
         val hitIds = result.hitMosquitoes
+        val mult = burnSpeedMultiplier
+
         for (mosquito in mosquitoes) {
             if (!mosquito.isAlive) {
                 mosquito.isBeingHitByLaser = false
@@ -137,8 +155,9 @@ class GameEngine(val stage: StageData) {
             mosquito.isBeingHitByLaser = isHit
 
             if (isHit) {
-                // Laser is continuously frying this mosquito
-                mosquito.burnTimeMs += 16L // Frame increment
+                // Laser burn rate scales with reflection count (2 mirrors = 2x speed -> 1.5s burn!)
+                val burnStep = (16L * mult).toLong()
+                mosquito.burnTimeMs += burnStep
                 if (mosquito.burnTimeMs >= mosquito.requiredBurnTimeMs) {
                     mosquito.isAlive = false
                     mosquitoesKilled++
