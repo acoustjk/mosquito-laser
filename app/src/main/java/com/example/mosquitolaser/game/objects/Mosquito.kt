@@ -34,6 +34,12 @@ class Mosquito(
     val startX: Float = x
     val startY: Float = y
 
+    // 3-second laser burn mechanics
+    var burnTimeMs: Long = 0L
+    val requiredBurnTimeMs: Long = 3_000L
+    val burnProgress: Float get() = (burnTimeMs.toFloat() / requiredBurnTimeMs).coerceIn(0f, 1f)
+    var isBeingHitByLaser: Boolean = false
+
     private var timeMs: Long = 0L
 
     // Random-movement state

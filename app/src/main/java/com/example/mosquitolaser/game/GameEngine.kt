@@ -81,13 +81,30 @@ class GameEngine(val stage: StageData) {
         reflectionCount = result.reflectionCount
         hitForbiddenZone = result.hitForbiddenZone
 
-        // Process mosquito hits
-        for (id in result.hitMosquitoes) {
-            val mosquito = mosquitoes.find { it.id == id }
-            if (mosquito != null && mosquito.isAlive) {
-                mosquito.isAlive = false
-                mosquitoesKilled++
-                onMosquitoKilled?.invoke(mosquito)
+        // Process 3-second laser burn per mosquito
+        val hitIds = result.hitMosquitoes
+        for (mosquito in mosquitoes) {
+            if (!mosquito.isAlive) {
+                mosquito.isBeingHitByLaser = false
+                continue
+            }
+
+            val isHit = hitIds.contains(mosquito.id)
+            mosquito.isBeingHitByLaser = isHit
+
+            if (isHit) {
+                // Laser is continuously frying this mosquito
+                mosquito.burnTimeMs += 16L // Frame increment
+                if (mosquito.burnTimeMs >= mosquito.requiredBurnTimeMs) {
+                    mosquito.isAlive = false
+                    mosquitoesKilled++
+                    onMosquitoKilled?.invoke(mosquito)
+                }
+            } else {
+                // Cool down slowly when laser leaves the mosquito
+                if (mosquito.burnTimeMs > 0L) {
+                    mosquito.burnTimeMs = (mosquito.burnTimeMs - 8L).coerceAtLeast(0L)
+                }
             }
         }
 
@@ -97,7 +114,8 @@ class GameEngine(val stage: StageData) {
     private fun checkWinCondition() {
         if (state != GameState.PLAYING || clearTriggered || failTriggered) return
 
-        val allDead = mosquitoes.all { !it.isAlive }
+        // ALL mosquitoes must be dead to clear the stage!
+        val allDead = mosquitoes.isNotEmpty() && mosquitoes.all { !it.isAlive }
         if (!allDead) return
 
         if (stage.condition.hasMinReflections() && reflectionCount < stage.condition.minReflections) return

@@ -258,6 +258,14 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
             wingAngle += wingDir * delta * 0.4f
             if (wingAngle > 30f) wingDir = -1f
             if (wingAngle < -30f) wingDir = 1f
+
+            // Emit sizzle sparks for mosquitoes currently being burned by laser
+            for (mosquito in engine.mosquitoes) {
+                if (mosquito.isAlive && mosquito.isBeingHitByLaser) {
+                    particleSystem.emitLaserSpark(mosquito.x, mosquito.y, w, h, Color.YELLOW)
+                }
+            }
+
             particleSystem.update(delta)
 
             val canvas = holder.lockCanvas() ?: continue
@@ -661,6 +669,55 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
                 pathEffect = DashPathEffect(floatArrayOf(6f, 4f), (SystemClock.elapsedRealtime() % 100f))
             }
             canvas.drawCircle(px, py, baseSize * 1.4f + mosquito.moveRange * min(w, h) * 0.5f, movePaint)
+        }
+
+        // 3-Second Laser Burn Gauge & Heat Aura
+        if (mosquito.burnTimeMs > 0L) {
+            val progress = mosquito.burnProgress
+
+            // Heat Aura Glow
+            val auraPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = if (mosquito.isBeingHitByLaser)
+                    Color.argb((150 * progress).toInt(), 255, 100, 0)
+                else
+                    Color.argb((80 * progress).toInt(), 255, 180, 0)
+                maskFilter = BlurMaskFilter(16f, BlurMaskFilter.Blur.NORMAL)
+            }
+            canvas.drawCircle(px, py, baseSize * (1.2f + progress * 0.8f), auraPaint)
+
+            // Background Arc Track
+            val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 8f
+                color = Color.argb(100, 50, 50, 50)
+            }
+            val arcR = baseSize * 1.8f
+            val arcRect = RectF(px - arcR, py - arcR, px + arcR, py + arcR)
+            canvas.drawArc(arcRect, -90f, 360f, false, trackPaint)
+
+            // Filled Progress Arc (Orange -> Bright Yellow)
+            val burnArcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 10f
+                strokeCap = Paint.Cap.ROUND
+                color = if (mosquito.isBeingHitByLaser)
+                    Color.argb(255, 255, (100 + 155 * progress).toInt(), 0)
+                else
+                    Color.argb(180, 255, 150, 0)
+            }
+            canvas.drawArc(arcRect, -90f, 360f * progress, false, burnArcPaint)
+
+            // Countdown / Burn Percent Text
+            val remainingSecs = ((mosquito.requiredBurnTimeMs - mosquito.burnTimeMs) / 1000f).coerceAtLeast(0f)
+            val burnTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.YELLOW
+                textSize = 24f
+                typeface = Typeface.DEFAULT_BOLD
+                textAlign = Paint.Align.CENTER
+                setShadowLayer(6f, 0f, 0f, Color.RED)
+            }
+            canvas.drawText(String.format("%.1fs", remainingSecs), px, py - baseSize * 2.2f, burnTextPaint)
         }
     }
 
