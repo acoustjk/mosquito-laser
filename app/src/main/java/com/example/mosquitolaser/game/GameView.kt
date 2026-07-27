@@ -39,8 +39,8 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
     // It is only interactive when a mirror is selected.
     private var dialCenterX = 0f
     private var dialCenterY = 0f
-    private val dialRadius get() = minOf(w, h) * 0.14f
-    private val dialPanelHeight get() = dialRadius * 2.8f
+    private val dialRadius get() = minOf(w, h) * 0.11f
+    private val dialPanelHeight get() = if (engine.selectedMirrorId != -1) dialRadius * 2.5f else 60f
 
     // Touch tracking for the dial
     private var dialTouching = false          // finger is on the dial
@@ -300,6 +300,9 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
         // Laser source
         drawLaserSource(canvas)
 
+        // Angle dial (drawn behind mosquitoes so mosquitoes are never hidden)
+        drawAngleDial(canvas)
+
         // Mosquitoes
         drawMosquitoes(canvas)
 
@@ -308,9 +311,6 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
 
         // HUD
         drawHUD(canvas)
-
-        // Angle dial (drawn last so it appears on top)
-        drawAngleDial(canvas)
     }
 
     private fun drawBackground(canvas: Canvas) {
@@ -816,19 +816,21 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
     private fun drawAngleDial(canvas: Canvas) {
         val selectedMirror = engine.mirrors.find { it.id == engine.selectedMirrorId }
 
-        // Always update dial centre (needed for touch hit-test)
-        dialCenterX = w / 2f
-        dialCenterY = h - dialRadius - 32f
-
-        // Panel background
-        val panelTop = h - dialPanelHeight
-        val panelRect = RectF(0f, panelTop, w, h)
-        canvas.drawRoundRect(panelRect, 24f, 24f, dialBgPaint)
-
         if (selectedMirror == null) {
-            // No mirror selected — show hint
-            dialHintPaint.textSize = 28f
-            canvas.drawText("🕴 거울을 탭하여 선택하세요", dialCenterX, h - dialRadius * 0.8f, dialHintPaint)
+            // Compact, non-intrusive hint bar when no mirror is selected
+            val hintRect = RectF(w * 0.12f, h - 52f, w * 0.88f, h - 12f)
+            dialBgPaint.color = Color.argb(120, 10, 15, 35)
+            canvas.drawRoundRect(hintRect, 20f, 20f, dialBgPaint)
+
+            val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 1.5f
+                color = Color.argb(80, 80, 160, 255)
+            }
+            canvas.drawRoundRect(hintRect, 20f, 20f, borderPaint)
+
+            dialHintPaint.textSize = 22f
+            canvas.drawText("💡 거울을 탭하면 각도 조절기가 나타납니다", w / 2f, h - 26f, dialHintPaint)
             return
         }
 
@@ -836,6 +838,26 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
         val minA = selectedMirror.minAngle
         val maxA = selectedMirror.maxAngle
         val r = dialRadius
+
+        // Floating glass pill card dimensions
+        val panelWidth = w * 0.76f
+        val panelLeft = (w - panelWidth) / 2f
+        val panelTop = h - dialPanelHeight
+        val panelRect = RectF(panelLeft, panelTop, panelLeft + panelWidth, h - 12f)
+
+        dialBgPaint.color = Color.argb(140, 10, 15, 40)
+        canvas.drawRoundRect(panelRect, 28f, 28f, dialBgPaint)
+
+        // Glass card stroke border
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            color = Color.argb(120, 100, 180, 255)
+        }
+        canvas.drawRoundRect(panelRect, 28f, 28f, borderPaint)
+
+        dialCenterX = w / 2f
+        dialCenterY = panelTop + (h - 12f - panelTop) * 0.52f
 
         // Allowed-range arc (background track)
         val arcRect = RectF(dialCenterX - r, dialCenterY - r, dialCenterX + r, dialCenterY + r)
@@ -881,18 +903,18 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
         canvas.drawCircle(dialCenterX, dialCenterY, 8f, dialKnobPaint)
         dialKnobPaint.color = Color.argb(255, 255, 240, 80)
 
-        // Angle value text
-        dialTextPaint.textSize = 38f
-        canvas.drawText("${curAngle.toInt()}°", dialCenterX, dialCenterY + r + 48f, dialTextPaint)
-
         // Mirror ID label
-        dialHintPaint.textSize = 22f
+        dialHintPaint.textSize = 20f
         canvas.drawText("거울 #${selectedMirror.id}  [${minA.toInt()}° ~ ${maxA.toInt()}°]",
-            dialCenterX, panelTop + 28f, dialHintPaint)
+            dialCenterX, panelTop + 24f, dialHintPaint)
+
+        // Angle value text
+        dialTextPaint.textSize = 34f
+        canvas.drawText("${curAngle.toInt()}°", dialCenterX, panelTop + 54f, dialTextPaint)
 
         // Drag hint arrows (←  →)
-        dialHintPaint.textSize = 26f
-        canvas.drawText("◀  드래그하여 회전  ▶", dialCenterX, dialCenterY + r + 80f, dialHintPaint)
+        dialHintPaint.textSize = 22f
+        canvas.drawText("◀  드래그하여 회전  ▶", dialCenterX, h - 22f, dialHintPaint)
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ class Mosquito(
     val moveRange: Float = 0.1f,
     val movePhase: Float = 0.0f,
     var isAlive: Boolean = true,
-    val hitRadius: Float = 0.04f
+    val hitRadius: Float = 0.02f
 ) {
     /**
      * Describes how a mosquito moves across the game grid.
