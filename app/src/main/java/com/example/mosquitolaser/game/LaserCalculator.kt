@@ -8,7 +8,8 @@ import kotlin.math.*
 
 /**
  * Laser ray-casting and reflection calculator.
- * All coordinates are normalized (0.0 to 1.0).
+ * All internal geometry calculations are performed in Pixel Space
+ * using canvasW and canvasH to guarantee 100% physically accurate 1:1 angles.
  */
 object LaserCalculator {
 
@@ -39,32 +40,39 @@ object LaserCalculator {
         var reflectionCount = 0
         var hitForbiddenZone = false
 
-        var currentX = stage.laserSource.x
-        var currentY = stage.laserSource.y
+        // Guard against zero / unitialized canvas dimensions
+        val w = if (canvasW > 1f) canvasW else 1000f
+        val h = if (canvasH > 1f) canvasH else 1000f
+
+        var currentPx = stage.laserSource.x * w
+        var currentPy = stage.laserSource.y * h
         var currentAngle = stage.laserSource.angle
 
         for (bounce in 0..MAX_BOUNCES) {
-            val result = castRay(currentX, currentY, currentAngle, liveMirrors, liveMosquitoes, stage.obstacles)
+            val result = castRayPixel(currentPx, currentPy, currentAngle, liveMirrors, liveMosquitoes, stage.obstacles, w, h)
 
-            val endX = result.x
-            val endY = result.y
+            val endPx = result.px
+            val endPy = result.py
 
-            segments.add(LaserSegment(currentX, currentY, endX, endY, bounce))
+            // Store normalized segment coordinates for drawing/rendering consistency
+            segments.add(LaserSegment(currentPx / w, currentPy / h, endPx / w, endPy / h, bounce))
 
-            // Check forbidden zones
+            // Check forbidden zones (in normalized space)
+            val segNormX1 = currentPx / w; val segNormY1 = currentPy / h
+            val segNormX2 = endPx / w; val segNormY2 = endPy / h
             if (stage.condition.hasForbiddenZones()) {
                 for (zone in stage.condition.forbiddenZones) {
-                    if (segmentIntersectsRect(currentX, currentY, endX, endY,
+                    if (segmentIntersectsRect(segNormX1, segNormY1, segNormX2, segNormY2,
                             zone.left, zone.top, zone.right, zone.bottom)) {
                         hitForbiddenZone = true
                     }
                 }
             }
 
-            // Check mosquito hits along this segment
+            // Check mosquito hits along this segment in pixel space
             for (mosquito in liveMosquitoes) {
                 if (mosquito.isAlive && !hitMosquitoes.contains(mosquito.id)) {
-                    if (segmentHitsMosquito(currentX, currentY, endX, endY, mosquito)) {
+                    if (segmentHitsMosquitoPixel(currentPx, currentPy, endPx, endPy, mosquito, w, h)) {
                         hitMosquitoes.add(mosquito.id)
                     }
                 }
@@ -75,13 +83,13 @@ object LaserCalculator {
                 HitType.MIRROR -> {
                     val mirror = result.mirror ?: break
                     currentAngle = mirror.reflect(currentAngle)
-                    currentX = result.x
-                    currentY = result.y
+                    currentPx = result.px
+                    currentPy = result.py
                     reflectionCount++
                 }
                 HitType.SEMI_OBSTACLE -> {
-                    currentX = result.x
-                    currentY = result.y
+                    currentPx = result.px
+                    currentPy = result.py
                 }
             }
         }
@@ -92,32 +100,33 @@ object LaserCalculator {
     private enum class HitType { BOUNDARY, OBSTACLE, MIRROR, SEMI_OBSTACLE }
 
     private data class RayHit(
-        val x: Float, val y: Float,
+        val px: Float, val py: Float,
         val distance: Float,
         val hitType: HitType,
         val mirror: Mirror? = null
     )
 
-    private fun castRay(
-        startX: Float, startY: Float, angleDeg: Float,
-        mirrors: List<Mirror>, mosquitoes: List<Mosquito>, obstacles: List<Obstacle>
+    private fun castRayPixel(
+        startPx: Float, startPy: Float, angleDeg: Float,
+        mirrors: List<Mirror>, mosquitoes: List<Mosquito>, obstacles: List<Obstacle>,
+        w: Float, h: Float
     ): RayHit {
         val angleRad = Math.toRadians(angleDeg.toDouble())
-        val dx = cos(angleRad).toFloat()
-        val dy = sin(angleRad).toFloat()
+        val rdx = cos(angleRad).toFloat()
+        val rdy = sin(angleRad).toFloat()
 
-        var nearestHit = rayBoundaryIntersection(startX, startY, dx, dy)
+        var nearestHit = rayBoundaryIntersectionPixel(startPx, startPy, rdx, rdy, w, h)
 
         for (mirror in mirrors) {
-            val hit = rayMirrorIntersection(startX, startY, dx, dy, mirror)
-            if (hit != null && hit.distance > 0.002f && hit.distance < nearestHit.distance) {
+            val hit = rayMirrorIntersectionPixel(startPx, startPy, rdx, rdy, mirror, w, h)
+            if (hit != null && hit.distance > 1f && hit.distance < nearestHit.distance) {
                 nearestHit = hit
             }
         }
 
         for (obstacle in obstacles) {
-            val hit = rayObstacleIntersection(startX, startY, dx, dy, obstacle)
-            if (hit != null && hit.distance > 0.002f && hit.distance < nearestHit.distance) {
+            val hit = rayObstacleIntersectionPixel(startPx, startPy, rdx, rdy, obstacle, w, h)
+            if (hit != null && hit.distance > 1f && hit.distance < nearestHit.distance) {
                 nearestHit = hit
             }
         }
@@ -125,40 +134,44 @@ object LaserCalculator {
         return nearestHit
     }
 
-    private fun rayBoundaryIntersection(x: Float, y: Float, dx: Float, dy: Float): RayHit {
+    private fun rayBoundaryIntersectionPixel(
+        px: Float, py: Float, rdx: Float, rdy: Float, w: Float, h: Float
+    ): RayHit {
         var tMin = Float.MAX_VALUE
-        if (dx < -1e-6f) { val t = -x / dx; if (t > 0.002f && t < tMin) tMin = t }
-        if (dx > 1e-6f)  { val t = (1f - x) / dx; if (t > 0.002f && t < tMin) tMin = t }
-        if (dy < -1e-6f) { val t = -y / dy; if (t > 0.002f && t < tMin) tMin = t }
-        if (dy > 1e-6f)  { val t = (1f - y) / dy; if (t > 0.002f && t < tMin) tMin = t }
-        if (tMin == Float.MAX_VALUE) tMin = 2f
-        return RayHit(x + dx * tMin, y + dy * tMin, tMin, HitType.BOUNDARY)
+        if (rdx < -1e-6f) { val t = -px / rdx; if (t > 1f && t < tMin) tMin = t }
+        if (rdx > 1e-6f)  { val t = (w - px) / rdx; if (t > 1f && t < tMin) tMin = t }
+        if (rdy < -1e-6f) { val t = -py / rdy; if (t > 1f && t < tMin) tMin = t }
+        if (rdy > 1e-6f)  { val t = (h - py) / rdy; if (t > 1f && t < tMin) tMin = t }
+        if (tMin == Float.MAX_VALUE) tMin = max(w, h) * 2f
+        return RayHit(px + rdx * tMin, py + rdy * tMin, tMin, HitType.BOUNDARY)
     }
 
-    private fun rayMirrorIntersection(
-        rx: Float, ry: Float, rdx: Float, rdy: Float, mirror: Mirror
+    private fun rayMirrorIntersectionPixel(
+        rx: Float, ry: Float, rdx: Float, rdy: Float, mirror: Mirror, w: Float, h: Float
     ): RayHit? {
+        val mx = mirror.x * w
+        val my = mirror.y * h
         val mirrorAngleRad = Math.toRadians(mirror.angle.toDouble())
-        val halfLen = mirror.size / 2f
+        val halfLen = mirror.size * min(w, h) / 2f
         val cos = cos(mirrorAngleRad).toFloat()
         val sin = sin(mirrorAngleRad).toFloat()
 
-        val x1 = mirror.x - cos * halfLen
-        val y1 = mirror.y - sin * halfLen
-        val x2 = mirror.x + cos * halfLen
-        val y2 = mirror.y + sin * halfLen
+        val x1 = mx - cos * halfLen
+        val y1 = my - sin * halfLen
+        val x2 = mx + cos * halfLen
+        val y2 = my + sin * halfLen
 
         val t = raySegmentIntersection(rx, ry, rdx, rdy, x1, y1, x2, y2) ?: return null
-        if (t < 0.002f) return null
+        if (t < 1.0f) return null
 
         return RayHit(rx + rdx * t, ry + rdy * t, t, HitType.MIRROR, mirror)
     }
 
-    private fun rayObstacleIntersection(
-        rx: Float, ry: Float, rdx: Float, rdy: Float, obstacle: Obstacle
+    private fun rayObstacleIntersectionPixel(
+        rx: Float, ry: Float, rdx: Float, rdy: Float, obstacle: Obstacle, w: Float, h: Float
     ): RayHit? {
-        val left = obstacle.x; val top = obstacle.y
-        val right = obstacle.x + obstacle.width; val bottom = obstacle.y + obstacle.height
+        val left = obstacle.x * w; val top = obstacle.y * h
+        val right = left + obstacle.width * w; val bottom = top + obstacle.height * h
         var tMin = 0f; var tMax = Float.MAX_VALUE
 
         if (abs(rdx) < 1e-6f) {
@@ -177,7 +190,7 @@ object LaserCalculator {
             tMin = max(tMin, t1); tMax = min(tMax, t2)
         }
 
-        if (tMax < tMin || tMin < 0.002f) return null
+        if (tMax < tMin || tMin < 1.0f) return null
 
         val hitType = if (obstacle.isSemiTransparent) HitType.SEMI_OBSTACLE else HitType.OBSTACLE
         return RayHit(rx + rdx * tMin, ry + rdy * tMin, tMin, hitType)
@@ -197,17 +210,21 @@ object LaserCalculator {
         return t
     }
 
-    private fun segmentHitsMosquito(
-        x1: Float, y1: Float, x2: Float, y2: Float, mosquito: Mosquito
+    private fun segmentHitsMosquitoPixel(
+        x1: Float, y1: Float, x2: Float, y2: Float, mosquito: Mosquito, w: Float, h: Float
     ): Boolean {
+        val mqx = mosquito.x * w
+        val mqy = mosquito.y * h
+        val hitRadiusPx = mosquito.hitRadius * min(w, h)
+
         val dx = x2 - x1; val dy = y2 - y1
         val lenSq = dx * dx + dy * dy
-        if (lenSq < 1e-10f) return false
-        val t = ((mosquito.x - x1) * dx + (mosquito.y - y1) * dy) / lenSq
+        if (lenSq < 1e-6f) return false
+        val t = ((mqx - x1) * dx + (mqy - y1) * dy) / lenSq
         val clampedT = t.coerceIn(0f, 1f)
         val closestX = x1 + clampedT * dx; val closestY = y1 + clampedT * dy
-        val dist = hypot(closestX - mosquito.x, closestY - mosquito.y)
-        return dist <= mosquito.hitRadius
+        val dist = hypot(closestX - mqx, closestY - mqy)
+        return dist <= hitRadiusPx
     }
 
     private fun segmentIntersectsRect(

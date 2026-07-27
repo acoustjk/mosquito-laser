@@ -1,1595 +1,1199 @@
-@file:Suppress("MagicNumber")
-
 package com.example.mosquitolaser.game.stages
 
+import android.graphics.RectF
 import com.example.mosquitolaser.game.objects.LaserSource
 import com.example.mosquitolaser.game.objects.Mirror
 import com.example.mosquitolaser.game.objects.Mosquito
 import com.example.mosquitolaser.game.objects.Obstacle
-import android.graphics.RectF
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  COORDINATE SYSTEM
-//  (0,0) = top-left   (1,0) = top-right
-//  (0,1) = bot-left   (1,1) = bot-right
-//
-//  LASER ANGLES  (degrees, clockwise from +X axis)
-//    0°  = firing RIGHT
-//   90°  = firing DOWN
-//  180°  = firing LEFT
-//  270°  = firing UP
-//
-//  MIRROR SURFACE ANGLES
-//   45° – beam going right deflects downward; beam going down deflects right
-//  135° – beam going right deflects upward;   beam going down deflects left
-// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Central registry of all 60 stages.
+ * Stage Repository containing all 60 stages across 6 themed worlds.
  *
- * Stages are stored 0-indexed internally; all public API is 1-based.
+ * 2D Reflection Table (Screen coords, Y-axis points DOWN):
+ *   Formula: R = (2 * M - A) mod 360
+ *
+ *   45° Mirror (\ shape):
+ *     - Right (0°)   -> DOWN (90°)
+ *     - Down (90°)   -> RIGHT (0°)
+ *     - Left (180°)  -> UP (270°)
+ *     - Up (270°)    -> LEFT (180°)
+ *
+ *   135° Mirror (/ shape):
+ *     - Right (0°)   -> UP (270°)
+ *     - Up (270°)    -> RIGHT (0°)
+ *     - Down (90°)   -> LEFT (180°)
+ *     - Left (180°)  -> DOWN (90°)
  */
 object StageRepository {
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Compact builder functions – keep stage definitions readable
-    // ─────────────────────────────────────────────────────────────────────────
+    // Helper builders for clean readability
+    private fun src(x: Float, y: Float, angle: Float, color: Int = 0xFF00FFFF.toInt()) =
+        LaserSource(x, y, angle, color)
 
-    private fun src(x: Float, y: Float, angle: Float) =
-        LaserSource(x, y, angle)
-
-    /**
-     * Mirror builder.
-     * [id]     – unique per stage (reuse across stages is fine; engine resolves by list index)
-     * [angle]  – surface orientation in degrees
-     * [range]  – ± rotation range the player is allowed (0 = fixed)
-     * [movable] – whether the player may reposition (drag) the mirror
-     */
-    private fun mirror(
-        id: Int,
-        x: Float,
-        y: Float,
-        angle: Float,
-        range: Float = 60f,
-        movable: Boolean = true,
-        size: Float = 0.06f
-    ) = Mirror(
-        id = id,
-        x = x,
-        y = y,
-        angle = angle,
-        minAngle = angle - range,
-        maxAngle = angle + range,
-        isMovable = movable,
-        size = size
-    )
-
-    // Mosquito.MovementType lives inside a companion object
-    private val STATIC   = Mosquito.MovementType.STATIC
-    private val LINEAR   = Mosquito.MovementType.LINEAR
-    private val CIRCULAR = Mosquito.MovementType.CIRCULAR
-    private val RANDOM   = Mosquito.MovementType.RANDOM   // "erratic" in design docs
+    private fun mirror(id: Int, x: Float, y: Float, startAngle: Float, range: Float = 45f, movable: Boolean = true) =
+        Mirror(id, x, y, startAngle, startAngle - range, startAngle + range, movable)
 
     private fun mq(id: Int, x: Float, y: Float) =
-        Mosquito(id, x, y, STATIC)
+        Mosquito(id, x, y, Mosquito.MovementType.STATIC)
 
-    private fun mqL(id: Int, x: Float, y: Float, speed: Float = 1.5f, range: Float = 0.10f) =
-        Mosquito(id, x, y, LINEAR, speed, range)
+    private fun mqL(id: Int, x: Float, y: Float, speed: Float = 1.5f, range: Float = 0.1f) =
+        Mosquito(id, x, y, Mosquito.MovementType.LINEAR, speed, range)
 
-    private fun mqC(id: Int, x: Float, y: Float, speed: Float = 1.8f, range: Float = 0.08f) =
-        Mosquito(id, x, y, CIRCULAR, speed, range)
+    private fun mqC(id: Int, x: Float, y: Float, speed: Float = 1.5f, range: Float = 0.08f) =
+        Mosquito(id, x, y, Mosquito.MovementType.CIRCULAR, speed, range)
 
-    private fun mqE(id: Int, x: Float, y: Float, speed: Float = 2.2f, range: Float = 0.10f) =
-        Mosquito(id, x, y, RANDOM, speed, range)
+    private fun mqE(id: Int, x: Float, y: Float, speed: Float = 2.0f, range: Float = 0.12f) =
+        Mosquito(id, x, y, Mosquito.MovementType.RANDOM, speed, range)
 
-    /** Wall obstacle – fully blocks laser */
     private fun wall(x: Float, y: Float, w: Float, h: Float) =
         Obstacle(x, y, w, h, isSemiTransparent = false)
 
-    /** Glass obstacle – semi-transparent, laser passes through */
     private fun glass(x: Float, y: Float, w: Float, h: Float) =
         Obstacle(x, y, w, h, isSemiTransparent = true)
 
-    /** Forbidden zone RectF (normalised). */
-    private fun zone(x1: Float, y1: Float, x2: Float, y2: Float) =
-        RectF(x1, y1, x2, y2)
-
-    // ─────────────────────────────────────────────────────────────────────────
-    //  ALL 60 STAGES
-    // ─────────────────────────────────────────────────────────────────────────
+    private fun zone(l: Float, t: Float, r: Float, b: Float) =
+        RectF(l, t, r, b)
 
     val stages: List<StageData> = listOf(
 
-        // ══════════════════════════════════════════════════════════════════════
-        //  WORLD 1 – NIGHT  (stages 1-10)
-        //  REFLECTION RULES (R = 2*M - A, y-axis DOWN):
-        //   45° mirror  : right(0°)↔down(90°),  left(180°)↔up(270°)
-        //   135° mirror : right(0°)↔up(270°),   left(180°)↔down(90°)
-        //
-        //  Starting angles are OFFSET from solution to prevent auto-clear.
-        //  Solution angle is always within [startAngle - range, startAngle + range].
-        // ══════════════════════════════════════════════════════════════════════
+        // ======================================================================
+        // WORLD 1 – NIGHT (stages 1-10)
+        // Fundamentals: 1 to 4 mirrors, simple reflection paths, no obstacles.
+        // ======================================================================
 
-        // ── Stage 1 – Tutorial ────────────────────────────────────────────────
-        // Laser →right. Mirror must be rotated to 45° to deflect beam DOWN → mosquito.
-        // Start at 80° (off-target). Solution: 45°. Range [20°,140°] includes 45°.
+        // Stage 1: Tutorial 1 - Single mirror (right -> down)
         StageData(
             stageNumber = 1, worldNumber = 1,
-            laserSource = src(0f, 0.5f, 0f),
-            mirrors = listOf(
-                mirror(1, 0.5f, 0.5f, angle = 80f, range = 60f)
-            ),
+            laserSource = src(0f, 0.4f, 0f),
+            mirrors = listOf(mirror(1, 0.5f, 0.4f, startAngle = 80f, range = 50f)), // sol=45°
             mosquitoes = listOf(mq(1, 0.5f, 0.85f)),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 2 ───────────────────────────────────────────────────────────
-        // Laser →right at y=0.3. Rotate mirror to 45° → beam goes DOWN → mosquito.
-        // Start at 78°. Range [33°,123°] includes 45°.
+        // Stage 2: Tutorial 2 - Single mirror (down -> right)
         StageData(
             stageNumber = 2, worldNumber = 1,
-            laserSource = src(0f, 0.3f, 0f),
-            mirrors = listOf(
-                mirror(1, 0.6f, 0.3f, 78f, 45f)
-            ),
-            mosquitoes = listOf(mq(1, 0.6f, 0.75f)),
+            laserSource = src(0.4f, 0f, 90f),
+            mirrors = listOf(mirror(1, 0.4f, 0.4f, startAngle = 80f, range = 50f)), // sol=45°
+            mosquitoes = listOf(mq(1, 0.82f, 0.4f)),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 3 – Two bounces: right→down→right ───────────────────────────
-        // Both mirrors need 45° (the "\" shape).
-        // M1: right→down. M2: down→right. Mosquito to right of M2.
-        // (Previous bug: M2 was 135°, which sends down→LEFT not right.)
+        // Stage 3: Two mirrors (right -> down -> right)
         StageData(
             stageNumber = 3, worldNumber = 1,
-            laserSource = src(0f, 0.2f, 0f),
+            laserSource = src(0f, 0.25f, 0f),
             mirrors = listOf(
-                mirror(1, 0.35f, 0.2f,  75f, 45f),  // sol=45°, right→down
-                mirror(2, 0.35f, 0.65f, 75f, 45f)   // sol=45°, down→right (was 135°!)
+                mirror(1, 0.35f, 0.25f, startAngle = 75f, range = 45f), // sol=45° (right->down)
+                mirror(2, 0.35f, 0.65f, startAngle = 75f, range = 45f)  // sol=45° (down->right)
             ),
-            mosquitoes = listOf(mq(1, 0.78f, 0.65f)),
+            mosquitoes = listOf(mq(1, 0.80f, 0.65f)),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 4 – Two bounces: down→right→down ────────────────────────────
-        // Laser from top. Both mirrors need 45°.
-        // M1: down→right. M2: right→down. Mosquito below M2.
-        // (Previous bug: M1 was 135°, range [90°,180°] → solution 45° was OUTSIDE range!)
+        // Stage 4: Two mirrors (down -> right -> down)
         StageData(
             stageNumber = 4, worldNumber = 1,
             laserSource = src(0.25f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.25f, 0.35f, 75f, 50f),  // sol=45°, down→right (was 135°!)
-                mirror(2, 0.72f, 0.35f, 75f, 50f)   // sol=45°, right→down
+                mirror(1, 0.25f, 0.35f, startAngle = 75f, range = 50f), // sol=45° (down->right)
+                mirror(2, 0.70f, 0.35f, startAngle = 75f, range = 50f)  // sol=45° (right->down)
             ),
-            mosquitoes = listOf(mq(1, 0.72f, 0.82f)),
+            mosquitoes = listOf(mq(1, 0.70f, 0.85f)),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 5 – Chain: down→right(mq1 in path)→down(mq2) ───────────────
-        // Source from top. Beam hits M1(45°)→right, passes mosquito 1 in mid-air,
-        // hits M2(45°)→down, kills mosquito 2. Both mirrors movable.
+        // Stage 5: Two mirrors chain (2 mosquitoes in beam path)
         StageData(
             stageNumber = 5, worldNumber = 1,
             laserSource = src(0.2f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.2f, 0.3f, 75f, 50f),   // sol=45°, down→right
-                mirror(2, 0.72f, 0.3f, 75f, 50f)   // sol=45°, right→down
+                mirror(1, 0.2f, 0.35f, startAngle = 75f, range = 50f), // sol=45° (down->right)
+                mirror(2, 0.7f, 0.35f, startAngle = 75f, range = 50f)  // sol=45° (right->down)
             ),
             mosquitoes = listOf(
-                mq(1, 0.46f, 0.3f),    // in the horizontal beam between M1 and M2
-                mq(2, 0.72f, 0.72f)    // below M2
+                mq(1, 0.45f, 0.35f), // mid-beam between M1 and M2
+                mq(2, 0.7f, 0.75f)   // below M2
             ),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 6 – Three-mirror zigzag: right→down→right→down ─────────────
-        // All three mirrors: 45°. "S-shaped" laser path.
+        // Stage 6: Three mirrors zigzag (right -> down -> right -> down)
         StageData(
             stageNumber = 6, worldNumber = 1,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.2f, 0f),
             mirrors = listOf(
-                mirror(1, 0.25f, 0.5f,  75f, 50f),  // sol=45°, right→down
-                mirror(2, 0.25f, 0.75f, 75f, 50f),  // sol=45°, down→right (was 135°!)
-                mirror(3, 0.70f, 0.75f, 75f, 50f)   // sol=45°, right→down
+                mirror(1, 0.3f, 0.2f, startAngle = 75f, range = 50f),  // sol=45° (right->down)
+                mirror(2, 0.3f, 0.55f, startAngle = 75f, range = 50f), // sol=45° (down->right)
+                mirror(3, 0.7f, 0.55f, startAngle = 75f, range = 50f)  // sol=45° (right->down)
             ),
-            mosquitoes = listOf(mq(1, 0.70f, 0.90f)),
+            mosquitoes = listOf(mq(1, 0.7f, 0.88f)),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 7 – Three mirrors, two mosquitoes ───────────────────────────
-        // Source top. M1(45°) down→right. M2(45°) right→down.
-        // Mosquito 1 sits in the horizontal beam between M1 and M2.
-        // M3(135°) sends the downward beam LEFT → mosquito 2.
+        // Stage 7: Three mirrors, 2 mosquitoes (down -> right -> down -> left)
         StageData(
             stageNumber = 7, worldNumber = 1,
-            laserSource = src(0.3f, 0f, 90f),
+            laserSource = src(0.25f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.3f,  0.4f,  75f, 50f),  // sol=45°,  down→right
-                mirror(2, 0.72f, 0.4f,  75f, 50f),  // sol=45°,  right→down
-                mirror(3, 0.72f, 0.72f, 100f, 40f)  // sol=135°, down→left
+                mirror(1, 0.25f, 0.35f, startAngle = 75f, range = 50f),  // sol=45° (down->right)
+                mirror(2, 0.75f, 0.35f, startAngle = 75f, range = 50f),  // sol=45° (right->down)
+                mirror(3, 0.75f, 0.72f, startAngle = 100f, range = 50f) // sol=135° (down->left)
             ),
             mosquitoes = listOf(
-                mq(1, 0.51f, 0.4f),   // in horizontal beam (M1→M2)
-                mq(2, 0.18f, 0.72f)   // in left beam from M3
+                mq(1, 0.50f, 0.35f), // in right-beam
+                mq(2, 0.20f, 0.72f)  // in left-beam
             ),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 8 – Four mirrors, two mosquitoes ────────────────────────────
-        // right→down [mq1 between M1&M2] →right→down→left→ mq2
+        // Stage 8: Four mirrors chain
         StageData(
             stageNumber = 8, worldNumber = 1,
             laserSource = src(0f, 0.15f, 0f),
             mirrors = listOf(
-                mirror(1, 0.25f, 0.15f, 75f, 45f),  // sol=45°,  right→down
-                mirror(2, 0.25f, 0.55f, 75f, 45f),  // sol=45°,  down→right (was 135°!)
-                mirror(3, 0.65f, 0.55f, 75f, 45f),  // sol=45°,  right→down
-                mirror(4, 0.65f, 0.82f, 100f, 40f)  // sol=135°, down→left
+                mirror(1, 0.25f, 0.15f, startAngle = 75f, range = 45f),  // sol=45° (right->down)
+                mirror(2, 0.25f, 0.55f, startAngle = 75f, range = 45f),  // sol=45° (down->right)
+                mirror(3, 0.65f, 0.55f, startAngle = 75f, range = 45f),  // sol=45° (right->down)
+                mirror(4, 0.65f, 0.82f, startAngle = 100f, range = 45f)  // sol=135° (down->left)
             ),
             mosquitoes = listOf(
-                mq(1, 0.25f, 0.35f),  // in first downward beam (between M1 and M2)
-                mq(2, 0.18f, 0.82f)   // in leftward beam from M4
+                mq(1, 0.25f, 0.35f),
+                mq(2, 0.20f, 0.82f)
             ),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 9 – Four mirrors, tight angles, two mosquitoes ──────────────
-        // Source RIGHT edge going LEFT (180°).
-        // Path: left→[M1 135°]→down→[M2 135°]→left→[M3 135°]→down
-        // Mosquito 1 in first down-beam (between M1 and M2)
-        // Mosquito 2 below M3
-        // Verify: left(180°)→M1(135°): R=2*135-180=90(down) ✓
-        //         down(90°)→M2(135°): R=2*135-90=180(left) ✓
-        //         left(180°)→M3(135°): R=2*135-180=90(down) ✓
+        // Stage 9: Four mirrors (left -> down -> left -> down)
         StageData(
             stageNumber = 9, worldNumber = 1,
-            laserSource = src(1f, 0.5f, 180f),
+            laserSource = src(1f, 0.2f, 180f),
             mirrors = listOf(
-                mirror(1, 0.75f, 0.5f,  100f, 40f),  // sol=135°, left→down
-                mirror(2, 0.75f, 0.75f, 100f, 40f),  // sol=135°, down→left
-                mirror(3, 0.35f, 0.75f, 100f, 40f)   // sol=135°, left→down
+                mirror(1, 0.75f, 0.2f, startAngle = 100f, range = 45f), // sol=135° (left->down)
+                mirror(2, 0.75f, 0.55f, startAngle = 100f, range = 45f), // sol=135° (down->left)
+                mirror(3, 0.35f, 0.55f, startAngle = 100f, range = 45f)  // sol=135° (left->down)
             ),
             mosquitoes = listOf(
-                mq(1, 0.75f, 0.62f),  // in downward beam between M1 and M2
-                mq(2, 0.35f, 0.88f)   // below M3
+                mq(1, 0.75f, 0.38f),
+                mq(2, 0.35f, 0.82f)
             ),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ── Stage 10 – Four mirrors, three mosquitoes chain, min 2 reflections ─
-        // Source left→ right→[M1 45°]→down (mq1 mid-beam)→[M2 45°]→right (mq2 mid-beam)→[M3 45°]→down (mq3)
-        // Tight angles, requires at least 2 reflections.
-        // All angles 45°: right↔down pattern.
+        // Stage 10: World 1 Boss - Four mirrors, 3 mosquitoes, min 2 reflections
         StageData(
             stageNumber = 10, worldNumber = 1,
             laserSource = src(0f, 0.15f, 0f),
             mirrors = listOf(
-                mirror(1, 0.22f, 0.15f, 75f, 35f),  // sol=45°, right→down
-                mirror(2, 0.22f, 0.55f, 75f, 35f),  // sol=45°, down→right
-                mirror(3, 0.60f, 0.55f, 75f, 35f)   // sol=45°, right→down
+                mirror(1, 0.25f, 0.15f, startAngle = 75f, range = 40f),  // sol=45°
+                mirror(2, 0.25f, 0.50f, startAngle = 75f, range = 40f),  // sol=45°
+                mirror(3, 0.65f, 0.50f, startAngle = 75f, range = 40f),  // sol=45°
+                mirror(4, 0.65f, 0.80f, startAngle = 100f, range = 40f)  // sol=135°
             ),
             mosquitoes = listOf(
-                mq(1, 0.22f, 0.35f),  // in first down-beam (M1→M2)
-                mq(2, 0.41f, 0.55f),  // in horizontal beam (M2→M3)
-                mq(3, 0.60f, 0.80f)   // below M3
+                mq(1, 0.25f, 0.32f),
+                mq(2, 0.45f, 0.50f),
+                mq(3, 0.20f, 0.80f)
             ),
             condition = StageCondition(minReflections = 2),
             worldTheme = WorldTheme.NIGHT
         ),
 
-        // ══════════════════════════════════════════════════════════════════════
-        //  WORLD 2 – CITY  (stages 11-20)
-        //  Obstacles introduced; glass panels and walls.
-        // ══════════════════════════════════════════════════════════════════════
+        // ======================================================================
+        // WORLD 2 – CITY (stages 11-20)
+        // Obstacles: Walls (solid blocks) and Glass (semi-transparent).
+        // ======================================================================
 
-        // ── Stage 11 ──────────────────────────────────────────────────────────
+        // Stage 11: Wall obstacle intro
         StageData(
             stageNumber = 11, worldNumber = 2,
             laserSource = src(0f, 0.3f, 0f),
-            mirrors = listOf(mirror(1, 0.55f, 0.3f, 45f, 50f)),
-            mosquitoes = listOf(mq(1, 0.55f, 0.78f)),
-            obstacles = listOf(wall(0.30f, 0.20f, 0.10f, 0.25f)),
+            mirrors = listOf(mirror(1, 0.65f, 0.3f, startAngle = 75f, range = 45f)), // sol=45° (right->down)
+            mosquitoes = listOf(mq(1, 0.65f, 0.80f)),
+            obstacles = listOf(wall(0.20f, 0.50f, 0.15f, 0.20f)), // Wall at bottom-left, out of beam
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 12 ──────────────────────────────────────────────────────────
+        // Stage 12: Bypassing a central wall
         StageData(
             stageNumber = 12, worldNumber = 2,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.2f, 0f),
             mirrors = listOf(
-                mirror(1, 0.3f, 0.5f,   45f, 45f),
-                mirror(2, 0.3f, 0.75f, 135f, 45f)
+                mirror(1, 0.4f, 0.2f, startAngle = 75f, range = 45f), // sol=45° (right->down)
+                mirror(2, 0.4f, 0.7f, startAngle = 75f, range = 45f)  // sol=45° (down->right)
             ),
-            mosquitoes = listOf(mq(1, 0.75f, 0.75f)),
-            obstacles = listOf(wall(0.55f, 0.60f, 0.10f, 0.30f)),
+            mosquitoes = listOf(mq(1, 0.85f, 0.7f)),
+            obstacles = listOf(wall(0.5f, 0.1f, 0.15f, 0.4f)), // Central wall blocking direct laser
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 13 – Glass obstacle ─────────────────────────────────────────
+        // Stage 13: Glass panel intro (laser passes through)
         StageData(
             stageNumber = 13, worldNumber = 2,
-            laserSource = src(0f, 0.4f, 0f),
+            laserSource = src(0f, 0.3f, 0f),
             mirrors = listOf(
-                mirror(1, 0.45f, 0.4f,  45f, 40f),
-                mirror(2, 0.45f, 0.7f, 135f, 40f)
+                mirror(1, 0.45f, 0.3f, startAngle = 75f, range = 45f), // sol=45°
+                mirror(2, 0.45f, 0.7f, startAngle = 75f, range = 45f)  // sol=45°
             ),
-            mosquitoes = listOf(mq(1, 0.80f, 0.7f)),
-            obstacles = listOf(glass(0.58f, 0.55f, 0.10f, 0.30f)),
+            mosquitoes = listOf(mq(1, 0.85f, 0.7f)),
+            obstacles = listOf(glass(0.60f, 0.60f, 0.10f, 0.20f)), // Glass panel in path
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 14 ──────────────────────────────────────────────────────────
+        // Stage 14: Two walls corridor
         StageData(
             stageNumber = 14, worldNumber = 2,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0.3f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.25f, 135f, 40f),
-                mirror(2, 0.2f,  0.25f,  45f, 40f),
-                mirror(3, 0.2f,  0.65f, 135f, 40f)
+                mirror(1, 0.3f, 0.25f, startAngle = 75f, range = 45f),  // sol=45° (down->right)
+                mirror(2, 0.75f, 0.25f, startAngle = 75f, range = 45f),  // sol=45° (right->down)
+                mirror(3, 0.75f, 0.75f, startAngle = 100f, range = 45f)  // sol=135° (down->left)
             ),
             mosquitoes = listOf(
-                mq(1, 0.2f,  0.88f),
-                mq(2, 0.55f, 0.65f)
+                mq(1, 0.75f, 0.50f),
+                mq(2, 0.20f, 0.75f)
             ),
             obstacles = listOf(
-                wall(0.55f, 0.10f, 0.15f, 0.12f),
-                wall(0.30f, 0.38f, 0.12f, 0.12f)
+                wall(0.45f, 0.05f, 0.10f, 0.18f),
+                wall(0.45f, 0.35f, 0.10f, 0.30f)
             ),
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 15 – Corridor-style ─────────────────────────────────────────
+        // Stage 15: Three mirrors around city blocks
         StageData(
             stageNumber = 15, worldNumber = 2,
             laserSource = src(0f, 0.5f, 0f),
             mirrors = listOf(
-                mirror(1, 0.38f, 0.5f,   45f, 35f),
-                mirror(2, 0.38f, 0.78f, 135f, 35f),
-                mirror(3, 0.72f, 0.78f,  45f, 35f)
+                mirror(1, 0.35f, 0.5f, startAngle = 75f, range = 45f),  // sol=45°
+                mirror(2, 0.35f, 0.8f, startAngle = 75f, range = 45f),  // sol=45°
+                mirror(3, 0.75f, 0.8f, startAngle = 75f, range = 45f)   // sol=45°
             ),
-            mosquitoes = listOf(mq(1, 0.72f, 0.92f)),
+            mosquitoes = listOf(mq(1, 0.75f, 0.95f)),
             obstacles = listOf(
-                wall(0.10f, 0.38f, 0.15f, 0.24f),
-                wall(0.50f, 0.62f, 0.10f, 0.06f),
-                wall(0.50f, 0.88f, 0.10f, 0.06f)
+                wall(0.48f, 0.40f, 0.12f, 0.30f),
+                wall(0.10f, 0.65f, 0.15f, 0.20f)
             ),
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 16 ──────────────────────────────────────────────────────────
+        // Stage 16: Four mirrors, 3 mosquitoes
         StageData(
             stageNumber = 16, worldNumber = 2,
             laserSource = src(0f, 0.2f, 0f),
             mirrors = listOf(
-                mirror(1, 0.3f,  0.2f,  45f, 35f),
-                mirror(2, 0.3f,  0.5f, 135f, 35f),
-                mirror(3, 0.6f,  0.5f,  45f, 35f),
-                mirror(4, 0.6f,  0.78f,135f, 35f)
+                mirror(1, 0.3f, 0.2f, startAngle = 75f, range = 45f),
+                mirror(2, 0.3f, 0.55f, startAngle = 75f, range = 45f),
+                mirror(3, 0.65f, 0.55f, startAngle = 75f, range = 45f),
+                mirror(4, 0.65f, 0.80f, startAngle = 100f, range = 45f)
             ),
             mosquitoes = listOf(
-                mq(1, 0.3f,  0.85f),
-                mq(2, 0.6f,  0.92f),
-                mq(3, 0.88f, 0.78f)
+                mq(1, 0.3f, 0.38f),
+                mq(2, 0.48f, 0.55f),
+                mq(3, 0.20f, 0.80f)
             ),
-            obstacles = listOf(
-                wall(0.42f, 0.10f, 0.10f, 0.08f),
-                wall(0.42f, 0.62f, 0.10f, 0.08f)
-            ),
+            obstacles = listOf(wall(0.45f, 0.10f, 0.10f, 0.35f)),
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 17 ──────────────────────────────────────────────────────────
+        // Stage 17: Multi-building maze
         StageData(
             stageNumber = 17, worldNumber = 2,
             laserSource = src(0f, 0.5f, 0f),
             mirrors = listOf(
-                mirror(1, 0.22f, 0.5f,   45f, 30f),
-                mirror(2, 0.22f, 0.78f, 135f, 30f),
-                mirror(3, 0.55f, 0.78f,  45f, 30f),
-                mirror(4, 0.55f, 0.55f, 135f, 30f),
-                mirror(5, 0.82f, 0.55f,  45f, 30f)
+                mirror(1, 0.25f, 0.5f, startAngle = 75f, range = 45f),
+                mirror(2, 0.25f, 0.8f, startAngle = 75f, range = 45f),
+                mirror(3, 0.55f, 0.8f, startAngle = 75f, range = 45f),
+                mirror(4, 0.55f, 0.55f, startAngle = 100f, range = 45f),
+                mirror(5, 0.85f, 0.55f, startAngle = 75f, range = 45f)
             ),
             mosquitoes = listOf(
-                mq(1, 0.82f, 0.82f),
-                mq(2, 0.92f, 0.55f)
+                mq(1, 0.40f, 0.8f),
+                mq(2, 0.85f, 0.82f)
             ),
             obstacles = listOf(
-                wall(0.30f, 0.38f, 0.08f, 0.28f),
-                wall(0.65f, 0.38f, 0.08f, 0.08f),
-                wall(0.65f, 0.85f, 0.08f, 0.07f)
+                wall(0.35f, 0.35f, 0.10f, 0.35f),
+                wall(0.65f, 0.65f, 0.10f, 0.25f)
             ),
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 18 – Five mirrors, min 3 reflections ────────────────────────
+        // Stage 18: Glass & wall combination
         StageData(
             stageNumber = 18, worldNumber = 2,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.2f, 0f),
             mirrors = listOf(
-                mirror(1, 0.2f,  0.5f,   45f, 30f),
-                mirror(2, 0.2f,  0.75f, 135f, 30f),
-                mirror(3, 0.45f, 0.75f,  45f, 30f),
-                mirror(4, 0.45f, 0.45f, 135f, 30f),
-                mirror(5, 0.72f, 0.45f,  45f, 30f)
+                mirror(1, 0.25f, 0.2f, startAngle = 75f, range = 45f),
+                mirror(2, 0.25f, 0.6f, startAngle = 75f, range = 45f),
+                mirror(3, 0.60f, 0.6f, startAngle = 75f, range = 45f),
+                mirror(4, 0.60f, 0.35f, startAngle = 100f, range = 45f),
+                mirror(5, 0.85f, 0.35f, startAngle = 75f, range = 45f)
             ),
-            mosquitoes = listOf(mq(1, 0.72f, 0.85f)),
+            mosquitoes = listOf(mq(1, 0.85f, 0.75f)),
             obstacles = listOf(
-                wall(0.55f, 0.30f, 0.07f, 0.12f),
-                wall(0.30f, 0.58f, 0.07f, 0.10f)
+                wall(0.38f, 0.10f, 0.10f, 0.40f),
+                glass(0.70f, 0.30f, 0.08f, 0.40f)
             ),
             condition = StageCondition(minReflections = 3),
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 19 – Six mirrors, three mosquitoes, two glass obstacles ──────
+        // Stage 19: Precision city corridor
         StageData(
             stageNumber = 19, worldNumber = 2,
             laserSource = src(0.5f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.18f,  45f, 30f),
-                mirror(2, 0.78f, 0.18f, 135f, 30f),
-                mirror(3, 0.78f, 0.55f,  45f, 30f),
-                mirror(4, 0.5f,  0.55f, 135f, 30f),
-                mirror(5, 0.5f,  0.78f,  45f, 30f),
-                mirror(6, 0.25f, 0.78f, 135f, 30f)
+                mirror(1, 0.5f, 0.2f, startAngle = 75f, range = 40f),
+                mirror(2, 0.8f, 0.2f, startAngle = 75f, range = 40f),
+                mirror(3, 0.8f, 0.55f, startAngle = 75f, range = 40f),
+                mirror(4, 0.5f, 0.55f, startAngle = 100f, range = 40f),
+                mirror(5, 0.5f, 0.80f, startAngle = 75f, range = 40f),
+                mirror(6, 0.2f, 0.80f, startAngle = 100f, range = 40f)
             ),
             mosquitoes = listOf(
-                mq(1, 0.78f, 0.85f),
-                mq(2, 0.5f,  0.92f),
-                mq(3, 0.1f,  0.78f)
+                mq(1, 0.8f, 0.38f),
+                mq(2, 0.5f, 0.68f),
+                mq(3, 0.2f, 0.92f)
             ),
             obstacles = listOf(
-                glass(0.60f, 0.30f, 0.10f, 0.10f),
-                glass(0.30f, 0.62f, 0.12f, 0.10f)
+                glass(0.60f, 0.30f, 0.10f, 0.15f),
+                wall(0.30f, 0.60f, 0.12f, 0.15f)
             ),
             condition = StageCondition(minReflections = 3),
             worldTheme = WorldTheme.CITY
         ),
 
-        // ── Stage 20 – City boss ──────────────────────────────────────────────
+        // Stage 20: World 2 Boss - City Center Lockdown
         StageData(
             stageNumber = 20, worldNumber = 2,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.15f, 0f),
             mirrors = listOf(
-                mirror(1, 0.18f, 0.5f,   45f, 25f),
-                mirror(2, 0.18f, 0.78f, 135f, 25f),
-                mirror(3, 0.42f, 0.78f,  45f, 25f),
-                mirror(4, 0.42f, 0.52f, 135f, 25f),
-                mirror(5, 0.65f, 0.52f,  45f, 25f),
-                mirror(6, 0.65f, 0.78f, 135f, 25f)
+                mirror(1, 0.2f, 0.15f, startAngle = 75f, range = 35f),
+                mirror(2, 0.2f, 0.50f, startAngle = 75f, range = 35f),
+                mirror(3, 0.5f, 0.50f, startAngle = 75f, range = 35f),
+                mirror(4, 0.5f, 0.80f, startAngle = 100f, range = 35f),
+                mirror(5, 0.8f, 0.80f, startAngle = 75f, range = 35f),
+                mirror(6, 0.8f, 0.50f, startAngle = 100f, range = 35f)
             ),
             mosquitoes = listOf(
-                mq(1, 0.18f, 0.93f),
-                mq(2, 0.65f, 0.93f),
-                mq(3, 0.88f, 0.52f)
+                mq(1, 0.2f, 0.32f),
+                mq(2, 0.35f, 0.50f),
+                mq(3, 0.8f, 0.93f)
             ),
             obstacles = listOf(
-                wall(0.28f, 0.38f, 0.07f, 0.12f),
-                wall(0.28f, 0.85f, 0.07f, 0.09f),
-                wall(0.72f, 0.60f, 0.08f, 0.08f)
+                wall(0.32f, 0.25f, 0.10f, 0.18f),
+                wall(0.62f, 0.55f, 0.10f, 0.18f)
             ),
             condition = StageCondition(minReflections = 4),
             worldTheme = WorldTheme.CITY
         ),
 
-        // ══════════════════════════════════════════════════════════════════════
-        //  WORLD 3 – JUNGLE  (stages 21-30)
-        //  Moving mosquitoes; mirror-move limits added at stage 24.
-        // ══════════════════════════════════════════════════════════════════════
+        // ======================================================================
+        // WORLD 3 – JUNGLE (stages 21-30)
+        // Mechanics: Moving mosquitoes (Linear, Circular, Random) + Mirror limits.
+        // ======================================================================
 
-        // ── Stage 21 – One linear mosquito ────────────────────────────────────
+        // Stage 21: Linear mosquito intro
         StageData(
             stageNumber = 21, worldNumber = 3,
             laserSource = src(0f, 0.4f, 0f),
-            mirrors = listOf(mirror(1, 0.5f, 0.4f, 45f, 55f)),
-            mosquitoes = listOf(mqL(1, 0.5f, 0.75f, 1.2f, 0.12f)),
+            mirrors = listOf(mirror(1, 0.5f, 0.4f, startAngle = 75f, range = 50f)), // sol=45°
+            mosquitoes = listOf(mqL(1, 0.5f, 0.75f, speed = 1.2f, range = 0.12f)),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ── Stage 22 – Two mirrors, one linear mosquito ───────────────────────
+        // Stage 22: Linear mosquito timing
         StageData(
             stageNumber = 22, worldNumber = 3,
-            laserSource = src(0f, 0.35f, 0f),
+            laserSource = src(0f, 0.25f, 0f),
             mirrors = listOf(
-                mirror(1, 0.4f, 0.35f,  45f, 45f),
-                mirror(2, 0.4f, 0.65f, 135f, 45f)
+                mirror(1, 0.4f, 0.25f, startAngle = 75f, range = 45f),
+                mirror(2, 0.4f, 0.65f, startAngle = 75f, range = 45f)
             ),
-            mosquitoes = listOf(mqL(1, 0.78f, 0.65f, 1.4f, 0.10f)),
+            mosquitoes = listOf(mqL(1, 0.75f, 0.65f, speed = 1.4f, range = 0.10f)),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ── Stage 23 – Three mirrors, two linear mosquitoes ───────────────────
+        // Stage 23: Two linear mosquitoes
         StageData(
             stageNumber = 23, worldNumber = 3,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0.3f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.28f, 135f, 40f),
-                mirror(2, 0.2f,  0.28f,  45f, 40f),
-                mirror(3, 0.2f,  0.65f, 135f, 40f)
+                mirror(1, 0.3f, 0.3f, startAngle = 75f, range = 45f),
+                mirror(2, 0.7f, 0.3f, startAngle = 75f, range = 45f),
+                mirror(3, 0.7f, 0.7f, startAngle = 100f, range = 45f)
             ),
             mosquitoes = listOf(
-                mqL(1, 0.2f,  0.82f, 1.4f, 0.08f),
-                mqL(2, 0.68f, 0.65f, 1.2f, 0.10f)
+                mqL(1, 0.5f, 0.3f, speed = 1.5f, range = 0.08f),
+                mqL(2, 0.35f, 0.7f, speed = 1.3f, range = 0.10f)
             ),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ── Stage 24 – Mirror limit = 2 introduced ───────────────────────────
+        // Stage 24: Mirror Move Limit (Max 2 mirrors)
         StageData(
             stageNumber = 24, worldNumber = 3,
-            laserSource = src(0f, 0.5f, 0f),
-            mirrors = listOf(
-                mirror(1, 0.3f,  0.5f,   45f, 35f),
-                mirror(2, 0.3f,  0.75f, 135f, 35f),
-                mirror(3, 0.65f, 0.75f,  45f, 10f, movable = false)
-            ),
-            mosquitoes = listOf(mqL(1, 0.65f, 0.90f, 1.5f, 0.08f)),
-            condition = StageCondition(maxMovableMirrors = 2),
-            worldTheme = WorldTheme.JUNGLE
-        ),
-
-        // ── Stage 25 – Circular mosquito, limit 2 ─────────────────────────────
-        StageData(
-            stageNumber = 25, worldNumber = 3,
             laserSource = src(0f, 0.3f, 0f),
             mirrors = listOf(
-                mirror(1, 0.35f, 0.3f,  45f, 40f),
-                mirror(2, 0.35f, 0.7f, 135f, 40f),
-                mirror(3, 0.70f, 0.7f,  45f, 15f, movable = false)
+                mirror(1, 0.35f, 0.3f, startAngle = 75f, range = 45f),
+                mirror(2, 0.35f, 0.7f, startAngle = 75f, range = 45f),
+                mirror(3, 0.75f, 0.7f, startAngle = 45f, range = 0f, movable = false) // Fixed mirror
             ),
-            mosquitoes = listOf(mqC(1, 0.70f, 0.88f, 1.7f, 0.07f)),
+            mosquitoes = listOf(mqL(1, 0.75f, 0.88f, speed = 1.5f, range = 0.08f)),
             condition = StageCondition(maxMovableMirrors = 2),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ── Stage 26 – Static + linear, mirror limit 3 ───────────────────────
+        // Stage 25: Circular mosquito intro
+        StageData(
+            stageNumber = 25, worldNumber = 3,
+            laserSource = src(0f, 0.4f, 0f),
+            mirrors = listOf(
+                mirror(1, 0.4f, 0.4f, startAngle = 75f, range = 45f),
+                mirror(2, 0.4f, 0.75f, startAngle = 75f, range = 45f)
+            ),
+            mosquitoes = listOf(mqC(1, 0.75f, 0.75f, speed = 1.6f, range = 0.07f)),
+            condition = StageCondition(maxMovableMirrors = 2),
+            worldTheme = WorldTheme.JUNGLE
+        ),
+
+        // Stage 26: Static + Linear combination
         StageData(
             stageNumber = 26, worldNumber = 3,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0.25f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.22f, 135f, 40f),
-                mirror(2, 0.25f, 0.22f,  45f, 40f),
-                mirror(3, 0.25f, 0.58f, 135f, 40f),
-                mirror(4, 0.60f, 0.58f,  45f, 15f, movable = false)
+                mirror(1, 0.25f, 0.3f, startAngle = 75f, range = 45f),
+                mirror(2, 0.65f, 0.3f, startAngle = 75f, range = 45f),
+                mirror(3, 0.65f, 0.65f, startAngle = 100f, range = 45f)
             ),
             mosquitoes = listOf(
-                mq(1, 0.25f, 0.78f),
-                mqL(2, 0.60f, 0.82f, 1.4f, 0.09f)
+                mq(1, 0.45f, 0.3f),
+                mqL(2, 0.35f, 0.65f, speed = 1.4f, range = 0.09f)
             ),
             condition = StageCondition(maxMovableMirrors = 3),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ── Stage 27 – Two circular mosquitoes, one obstacle, limit 3 ─────────
+        // Stage 27: Two circular mosquitoes with obstacles
         StageData(
             stageNumber = 27, worldNumber = 3,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.2f, 0f),
             mirrors = listOf(
-                mirror(1, 0.22f, 0.5f,   45f, 35f),
-                mirror(2, 0.22f, 0.75f, 135f, 35f),
-                mirror(3, 0.55f, 0.75f,  45f, 35f),
-                mirror(4, 0.55f, 0.45f, 135f, 35f)
+                mirror(1, 0.3f, 0.2f, startAngle = 75f, range = 40f),
+                mirror(2, 0.3f, 0.6f, startAngle = 75f, range = 40f),
+                mirror(3, 0.7f, 0.6f, startAngle = 75f, range = 40f),
+                mirror(4, 0.7f, 0.85f, startAngle = 100f, range = 40f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.22f, 0.9f, 1.8f, 0.07f),
-                mqC(2, 0.82f, 0.45f, 1.8f, 0.07f)
+                mqC(1, 0.5f, 0.6f, speed = 1.8f, range = 0.06f),
+                mqC(2, 0.35f, 0.85f, speed = 1.8f, range = 0.06f)
             ),
-            obstacles = listOf(wall(0.35f, 0.38f, 0.07f, 0.24f)),
+            obstacles = listOf(wall(0.45f, 0.25f, 0.10f, 0.25f)),
             condition = StageCondition(maxMovableMirrors = 3),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ── Stage 28 – Five mirrors, mixed movement, limit 3 ─────────────────
+        // Stage 28: Mixed movement (Linear + Circular + Static)
         StageData(
             stageNumber = 28, worldNumber = 3,
             laserSource = src(1f, 0.3f, 180f),
             mirrors = listOf(
-                mirror(1, 0.75f, 0.3f,  135f, 35f),
-                mirror(2, 0.75f, 0.65f,  45f, 35f),
-                mirror(3, 0.45f, 0.65f, 135f, 35f),
-                mirror(4, 0.45f, 0.35f,  45f, 15f, movable = false),
-                mirror(5, 0.2f,  0.35f, 135f, 35f)
+                mirror(1, 0.75f, 0.3f, startAngle = 100f, range = 40f),
+                mirror(2, 0.75f, 0.65f, startAngle = 75f, range = 40f),
+                mirror(3, 0.35f, 0.65f, startAngle = 100f, range = 40f),
+                mirror(4, 0.35f, 0.85f, startAngle = 75f, range = 0f, movable = false)
             ),
             mosquitoes = listOf(
-                mqL(1, 0.2f,  0.15f, 1.4f, 0.10f),
-                mqC(2, 0.45f, 0.82f, 1.6f, 0.08f),
-                mq(3, 0.92f, 0.65f)
+                mqL(1, 0.55f, 0.65f, speed = 1.4f, range = 0.08f),
+                mqC(2, 0.55f, 0.85f, speed = 1.6f, range = 0.07f),
+                mq(3, 0.75f, 0.48f)
             ),
-            obstacles = listOf(wall(0.56f, 0.48f, 0.09f, 0.07f)),
             condition = StageCondition(maxMovableMirrors = 3, minReflections = 3),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ── Stage 29 – Random (erratic) mosquito introduced ──────────────────
+        // Stage 29: Erratic (Random) mosquito intro
         StageData(
             stageNumber = 29, worldNumber = 3,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.4f, 0f),
             mirrors = listOf(
-                mirror(1, 0.3f,  0.5f,   45f, 35f),
-                mirror(2, 0.3f,  0.72f, 135f, 35f),
-                mirror(3, 0.6f,  0.72f,  45f, 25f),
-                mirror(4, 0.6f,  0.5f,  135f, 25f)
+                mirror(1, 0.35f, 0.4f, startAngle = 75f, range = 40f),
+                mirror(2, 0.35f, 0.75f, startAngle = 75f, range = 40f),
+                mirror(3, 0.75f, 0.75f, startAngle = 75f, range = 40f)
             ),
             mosquitoes = listOf(
-                mqE(1, 0.82f, 0.5f,  2.0f, 0.10f),
-                mq(2, 0.6f,  0.88f)
+                mqE(1, 0.75f, 0.88f, speed = 2.0f, range = 0.08f),
+                mq(2, 0.55f, 0.75f)
             ),
-            obstacles = listOf(
-                wall(0.42f, 0.38f, 0.08f, 0.07f),
-                glass(0.42f, 0.75f, 0.08f, 0.07f)
-            ),
+            obstacles = listOf(glass(0.48f, 0.60f, 0.10f, 0.20f)),
             condition = StageCondition(maxMovableMirrors = 3),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ── Stage 30 – Jungle boss ────────────────────────────────────────────
+        // Stage 30: World 3 Boss - Jungle Swarm
         StageData(
             stageNumber = 30, worldNumber = 3,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0.25f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.18f, 135f, 30f),
-                mirror(2, 0.22f, 0.18f,  45f, 30f),
-                mirror(3, 0.22f, 0.5f,  135f, 30f),
-                mirror(4, 0.22f, 0.75f,  45f, 15f, movable = false),
-                mirror(5, 0.55f, 0.5f,   45f, 30f),
-                mirror(6, 0.55f, 0.75f, 135f, 15f, movable = false)
+                mirror(1, 0.25f, 0.25f, startAngle = 75f, range = 35f),
+                mirror(2, 0.65f, 0.25f, startAngle = 75f, range = 35f),
+                mirror(3, 0.65f, 0.55f, startAngle = 100f, range = 35f),
+                mirror(4, 0.25f, 0.55f, startAngle = 75f, range = 0f, movable = false),
+                mirror(5, 0.25f, 0.82f, startAngle = 75f, range = 35f)
             ),
             mosquitoes = listOf(
-                mqL(1, 0.22f, 0.92f, 1.6f, 0.09f),
-                mqC(2, 0.55f, 0.92f, 1.8f, 0.07f),
-                mqE(3, 0.78f, 0.5f,  2.0f, 0.11f)
+                mqL(1, 0.45f, 0.25f, speed = 1.6f, range = 0.08f),
+                mqC(2, 0.45f, 0.55f, speed = 1.8f, range = 0.07f),
+                mqE(3, 0.55f, 0.82f, speed = 2.0f, range = 0.09f)
             ),
-            obstacles = listOf(
-                wall(0.35f, 0.35f, 0.07f, 0.30f),
-                glass(0.60f, 0.60f, 0.08f, 0.10f)
-            ),
-            condition = StageCondition(maxMovableMirrors = 3, minReflections = 3),
+            obstacles = listOf(wall(0.40f, 0.35f, 0.10f, 0.15f)),
+            condition = StageCondition(maxMovableMirrors = 4, minReflections = 3),
             worldTheme = WorldTheme.JUNGLE
         ),
 
-        // ══════════════════════════════════════════════════════════════════════
-        //  WORLD 4 – FACTORY  (stages 31-40)
-        //  Time limits; forbidden zones from stage 38.
-        // ══════════════════════════════════════════════════════════════════════
+        // ======================================================================
+        // WORLD 4 – FACTORY (stages 31-40)
+        // Mechanics: Time limits (30-60s) + Forbidden zones.
+        // ======================================================================
 
-        // ── Stage 31 – 60-second limit ────────────────────────────────────────
+        // Stage 31: Time limit intro (60s)
         StageData(
             stageNumber = 31, worldNumber = 4,
             laserSource = src(0f, 0.4f, 0f),
             mirrors = listOf(
-                mirror(1, 0.35f, 0.4f,   45f, 45f),
-                mirror(2, 0.35f, 0.7f,  135f, 45f),
-                mirror(3, 0.70f, 0.7f,   45f, 45f)
+                mirror(1, 0.4f, 0.4f, startAngle = 75f, range = 45f),
+                mirror(2, 0.4f, 0.75f, startAngle = 75f, range = 45f)
             ),
-            mosquitoes = listOf(mq(1, 0.70f, 0.88f)),
-            obstacles = listOf(wall(0.50f, 0.55f, 0.08f, 0.10f)),
+            mosquitoes = listOf(mq(1, 0.8f, 0.75f)),
             condition = StageCondition(timeLimitSeconds = 60),
             worldTheme = WorldTheme.FACTORY
         ),
 
-        // ── Stage 32 – 58 seconds, two mosquitoes ─────────────────────────────
+        // Stage 32: 55s timer, 2 mosquitoes
         StageData(
             stageNumber = 32, worldNumber = 4,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.25f, 0f),
             mirrors = listOf(
-                mirror(1, 0.25f, 0.5f,   45f, 40f),
-                mirror(2, 0.25f, 0.75f, 135f, 40f),
-                mirror(3, 0.60f, 0.75f,  45f, 40f)
+                mirror(1, 0.35f, 0.25f, startAngle = 75f, range = 45f),
+                mirror(2, 0.35f, 0.65f, startAngle = 75f, range = 45f),
+                mirror(3, 0.75f, 0.65f, startAngle = 75f, range = 45f)
             ),
             mosquitoes = listOf(
-                mq(1, 0.25f, 0.90f),
-                mq(2, 0.60f, 0.90f)
+                mq(1, 0.35f, 0.45f),
+                mq(2, 0.75f, 0.88f)
             ),
-            obstacles = listOf(wall(0.40f, 0.38f, 0.08f, 0.24f)),
-            condition = StageCondition(timeLimitSeconds = 58),
+            condition = StageCondition(timeLimitSeconds = 55),
             worldTheme = WorldTheme.FACTORY
         ),
 
-        // ── Stage 33 – 55 seconds, linear mosquito ────────────────────────────
+        // Stage 33: 50s timer, moving mosquito
         StageData(
             stageNumber = 33, worldNumber = 4,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0.4f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.25f,  45f, 40f),
-                mirror(2, 0.80f, 0.25f, 135f, 40f),
-                mirror(3, 0.80f, 0.60f,  45f, 40f)
+                mirror(1, 0.4f, 0.3f, startAngle = 75f, range = 40f),
+                mirror(2, 0.8f, 0.3f, startAngle = 75f, range = 40f),
+                mirror(3, 0.8f, 0.7f, startAngle = 100f, range = 40f)
             ),
-            mosquitoes = listOf(mqL(1, 0.80f, 0.82f, 1.7f, 0.09f)),
-            obstacles = listOf(
-                wall(0.62f, 0.12f, 0.08f, 0.10f),
-                wall(0.62f, 0.42f, 0.08f, 0.10f)
-            ),
-            condition = StageCondition(timeLimitSeconds = 55),
+            mosquitoes = listOf(mqL(1, 0.4f, 0.7f, speed = 1.5f, range = 0.10f)),
+            condition = StageCondition(timeLimitSeconds = 50),
             worldTheme = WorldTheme.FACTORY
         ),
 
-        // ── Stage 34 – 55 seconds, two linear mosquitoes, 4 mirrors ──────────
+        // Stage 34: Forbidden Zone intro
         StageData(
             stageNumber = 34, worldNumber = 4,
-            laserSource = src(0f, 0.3f, 0f),
+            laserSource = src(0f, 0.5f, 0f),
             mirrors = listOf(
-                mirror(1, 0.28f, 0.3f,   45f, 35f),
-                mirror(2, 0.28f, 0.6f,  135f, 35f),
-                mirror(3, 0.58f, 0.6f,   45f, 35f),
-                mirror(4, 0.58f, 0.3f,  135f, 35f)
+                mirror(1, 0.3f, 0.5f, startAngle = 75f, range = 45f),
+                mirror(2, 0.3f, 0.8f, startAngle = 75f, range = 45f),
+                mirror(3, 0.7f, 0.8f, startAngle = 75f, range = 45f)
             ),
-            mosquitoes = listOf(
-                mqL(1, 0.28f, 0.82f, 1.6f, 0.09f),
-                mqL(2, 0.82f, 0.3f,  1.6f, 0.09f)
+            mosquitoes = listOf(mq(1, 0.7f, 0.95f)),
+            condition = StageCondition(
+                timeLimitSeconds = 50,
+                forbiddenZones = listOf(zone(0.4f, 0.1f, 0.9f, 0.45f)) // Top-right hazard zone
             ),
-            obstacles = listOf(
-                wall(0.38f, 0.18f, 0.08f, 0.10f),
-                wall(0.38f, 0.68f, 0.08f, 0.10f)
-            ),
-            condition = StageCondition(timeLimitSeconds = 55),
             worldTheme = WorldTheme.FACTORY
         ),
 
-        // ── Stage 35 – 50 seconds, mirror limit 3, circular mosquito ──────────
+        // Stage 35: Forbidden Zone + 2 Mirrors
         StageData(
             stageNumber = 35, worldNumber = 4,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.2f, 0f),
             mirrors = listOf(
-                mirror(1, 0.22f, 0.5f,   45f, 35f),
-                mirror(2, 0.22f, 0.75f, 135f, 35f),
-                mirror(3, 0.55f, 0.75f,  45f, 20f, movable = false),
-                mirror(4, 0.55f, 0.45f, 135f, 35f)
-            ),
-            mosquitoes = listOf(mqC(1, 0.82f, 0.45f, 1.9f, 0.08f)),
-            obstacles = listOf(wall(0.35f, 0.38f, 0.07f, 0.24f)),
-            condition = StageCondition(timeLimitSeconds = 50, maxMovableMirrors = 3),
-            worldTheme = WorldTheme.FACTORY
-        ),
-
-        // ── Stage 36 – 50 seconds, 5 mirrors, 2 mosquitoes ───────────────────
-        StageData(
-            stageNumber = 36, worldNumber = 4,
-            laserSource = src(1f, 0.4f, 180f),
-            mirrors = listOf(
-                mirror(1, 0.75f, 0.4f,  135f, 32f),
-                mirror(2, 0.75f, 0.7f,   45f, 32f),
-                mirror(3, 0.45f, 0.7f,  135f, 32f),
-                mirror(4, 0.45f, 0.4f,   45f, 32f),
-                mirror(5, 0.20f, 0.4f,  135f, 32f)
+                mirror(1, 0.35f, 0.2f, startAngle = 75f, range = 40f),
+                mirror(2, 0.35f, 0.7f, startAngle = 75f, range = 40f),
+                mirror(3, 0.75f, 0.7f, startAngle = 75f, range = 40f)
             ),
             mosquitoes = listOf(
-                mqL(1, 0.20f, 0.20f, 1.7f, 0.10f),
-                mqC(2, 0.92f, 0.70f, 1.8f, 0.08f)
+                mq(1, 0.35f, 0.45f),
+                mqC(2, 0.75f, 0.88f, speed = 1.6f, range = 0.07f)
             ),
-            obstacles = listOf(
-                wall(0.55f, 0.55f, 0.09f, 0.07f),
-                wall(0.28f, 0.55f, 0.09f, 0.07f)
-            ),
-            condition = StageCondition(timeLimitSeconds = 50, maxMovableMirrors = 4),
-            worldTheme = WorldTheme.FACTORY
-        ),
-
-        // ── Stage 37 – 45 seconds, 3 mosquitoes, tight angles ────────────────
-        StageData(
-            stageNumber = 37, worldNumber = 4,
-            laserSource = src(0.5f, 0f, 90f),
-            mirrors = listOf(
-                mirror(1, 0.5f,  0.2f,   45f, 28f),
-                mirror(2, 0.80f, 0.2f,  135f, 28f),
-                mirror(3, 0.80f, 0.55f,  45f, 28f),
-                mirror(4, 0.5f,  0.55f, 135f, 28f),
-                mirror(5, 0.5f,  0.8f,   45f, 28f)
-            ),
-            mosquitoes = listOf(
-                mq(1, 0.80f, 0.85f),
-                mqL(2, 0.5f,  0.93f, 1.8f, 0.08f),
-                mqC(3, 0.18f, 0.55f, 1.7f, 0.08f)
-            ),
-            obstacles = listOf(
-                wall(0.60f, 0.35f, 0.10f, 0.07f),
-                wall(0.30f, 0.65f, 0.10f, 0.07f)
-            ),
-            condition = StageCondition(timeLimitSeconds = 45, minReflections = 3),
-            worldTheme = WorldTheme.FACTORY
-        ),
-
-        // ── Stage 38 – 45 seconds, forbidden zone introduced ─────────────────
-        StageData(
-            stageNumber = 38, worldNumber = 4,
-            laserSource = src(0f, 0.5f, 0f),
-            mirrors = listOf(
-                mirror(1, 0.28f, 0.5f,   45f, 35f),
-                mirror(2, 0.28f, 0.78f, 135f, 35f),
-                mirror(3, 0.62f, 0.78f,  45f, 35f)
-            ),
-            mosquitoes = listOf(mq(1, 0.62f, 0.92f)),
-            obstacles = listOf(wall(0.42f, 0.62f, 0.08f, 0.08f)),
             condition = StageCondition(
                 timeLimitSeconds = 45,
-                forbiddenZones = listOf(zone(0.30f, 0.08f, 0.70f, 0.40f))
+                forbiddenZones = listOf(zone(0.45f, 0.10f, 0.90f, 0.45f))
             ),
             worldTheme = WorldTheme.FACTORY
         ),
 
-        // ── Stage 39 – 40 seconds, forbidden zone + mirror limit ─────────────
+        // Stage 36: 45s timer, 5 mirrors, factory machinery
         StageData(
-            stageNumber = 39, worldNumber = 4,
-            laserSource = src(0f, 0.55f, 0f),
+            stageNumber = 36, worldNumber = 4,
+            laserSource = src(1f, 0.25f, 180f),
             mirrors = listOf(
-                mirror(1, 0.30f, 0.55f,  45f, 32f),
-                mirror(2, 0.30f, 0.78f, 135f, 32f),
-                mirror(3, 0.62f, 0.78f,  45f, 18f, movable = false),
-                mirror(4, 0.62f, 0.55f, 135f, 32f)
+                mirror(1, 0.75f, 0.25f, startAngle = 100f, range = 35f),
+                mirror(2, 0.75f, 0.6f, startAngle = 75f, range = 35f),
+                mirror(3, 0.35f, 0.6f, startAngle = 100f, range = 35f),
+                mirror(4, 0.35f, 0.85f, startAngle = 75f, range = 35f)
             ),
             mosquitoes = listOf(
-                mq(1, 0.62f, 0.93f),
-                mqL(2, 0.88f, 0.55f, 1.9f, 0.09f)
+                mqL(1, 0.55f, 0.6f, speed = 1.6f, range = 0.08f),
+                mqC(2, 0.6f, 0.85f, speed = 1.8f, range = 0.07f)
             ),
-            obstacles = listOf(wall(0.44f, 0.40f, 0.08f, 0.08f)),
+            obstacles = listOf(wall(0.45f, 0.10f, 0.15f, 0.35f)),
+            condition = StageCondition(timeLimitSeconds = 45),
+            worldTheme = WorldTheme.FACTORY
+        ),
+
+        // Stage 37: 40s timer, tight angles + hazard zone
+        StageData(
+            stageNumber = 37, worldNumber = 4,
+            laserSource = src(0.3f, 0f, 90f),
+            mirrors = listOf(
+                mirror(1, 0.3f, 0.25f, startAngle = 75f, range = 35f),
+                mirror(2, 0.75f, 0.25f, startAngle = 75f, range = 35f),
+                mirror(3, 0.75f, 0.65f, startAngle = 100f, range = 35f),
+                mirror(4, 0.3f, 0.65f, startAngle = 75f, range = 35f)
+            ),
+            mosquitoes = listOf(
+                mq(1, 0.52f, 0.25f),
+                mqL(2, 0.3f, 0.88f, speed = 1.8f, range = 0.08f)
+            ),
             condition = StageCondition(
                 timeLimitSeconds = 40,
-                maxMovableMirrors = 3,
-                forbiddenZones = listOf(zone(0.05f, 0.05f, 0.50f, 0.45f))
+                forbiddenZones = listOf(zone(0.40f, 0.35f, 0.65f, 0.55f))
             ),
             worldTheme = WorldTheme.FACTORY
         ),
 
-        // ── Stage 40 – Factory boss ───────────────────────────────────────────
+        // Stage 38: Dual hazard zones
         StageData(
-            stageNumber = 40, worldNumber = 4,
-            laserSource = src(0f, 0.5f, 0f),
-            mirrors = listOf(
-                mirror(1, 0.18f, 0.5f,   45f, 25f),
-                mirror(2, 0.18f, 0.78f, 135f, 25f),
-                mirror(3, 0.42f, 0.78f,  45f, 25f),
-                mirror(4, 0.42f, 0.52f, 135f, 25f),
-                mirror(5, 0.65f, 0.52f,  45f, 25f),
-                mirror(6, 0.65f, 0.78f, 135f, 20f, movable = false)
-            ),
-            mosquitoes = listOf(
-                mqC(1, 0.18f, 0.92f, 2.0f, 0.08f),
-                mqL(2, 0.42f, 0.92f, 1.8f, 0.09f),
-                mqE(3, 0.88f, 0.52f, 2.2f, 0.10f)
-            ),
-            obstacles = listOf(
-                wall(0.28f, 0.38f, 0.08f, 0.10f),
-                wall(0.52f, 0.62f, 0.08f, 0.08f),
-                glass(0.28f, 0.85f, 0.07f, 0.07f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 35,
-                maxMovableMirrors = 5,
-                minReflections = 4,
-                forbiddenZones = listOf(zone(0.40f, 0.05f, 0.90f, 0.40f))
-            ),
-            worldTheme = WorldTheme.FACTORY
-        ),
-
-        // ══════════════════════════════════════════════════════════════════════
-        //  WORLD 5 – VOLCANO  (stages 41-50)
-        //  Very fast mosquitoes; tight angles; combined conditions.
-        // ══════════════════════════════════════════════════════════════════════
-
-        // ── Stage 41 – 55 seconds, fast circular mosquito ─────────────────────
-        StageData(
-            stageNumber = 41, worldNumber = 5,
+            stageNumber = 38, worldNumber = 4,
             laserSource = src(0f, 0.4f, 0f),
             mirrors = listOf(
-                mirror(1, 0.40f, 0.4f,   45f, 30f),
-                mirror(2, 0.40f, 0.72f, 135f, 30f)
-            ),
-            mosquitoes = listOf(mqC(1, 0.75f, 0.72f, 2.5f, 0.08f)),
-            obstacles = listOf(wall(0.55f, 0.28f, 0.09f, 0.10f)),
-            condition = StageCondition(timeLimitSeconds = 55, minReflections = 2),
-            worldTheme = WorldTheme.VOLCANO
-        ),
-
-        // ── Stage 42 – 50 seconds, 4 mirrors, two fast mosquitoes ────────────
-        StageData(
-            stageNumber = 42, worldNumber = 5,
-            laserSource = src(0.5f, 0f, 90f),
-            mirrors = listOf(
-                mirror(1, 0.5f,  0.22f, 135f, 28f),
-                mirror(2, 0.22f, 0.22f,  45f, 28f),
-                mirror(3, 0.22f, 0.6f,  135f, 28f),
-                mirror(4, 0.65f, 0.6f,   45f, 28f)
+                mirror(1, 0.25f, 0.4f, startAngle = 75f, range = 35f),
+                mirror(2, 0.25f, 0.75f, startAngle = 75f, range = 35f),
+                mirror(3, 0.65f, 0.75f, startAngle = 75f, range = 35f),
+                mirror(4, 0.65f, 0.4f, startAngle = 100f, range = 35f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.22f, 0.82f, 2.6f, 0.07f),
-                mqL(2, 0.65f, 0.82f, 2.4f, 0.09f)
-            ),
-            obstacles = listOf(
-                wall(0.35f, 0.38f, 0.07f, 0.10f),
-                wall(0.35f, 0.65f, 0.07f, 0.10f)
-            ),
-            condition = StageCondition(timeLimitSeconds = 50, maxMovableMirrors = 3),
-            worldTheme = WorldTheme.VOLCANO
-        ),
-
-        // ── Stage 43 – 48 seconds, erratic + circular, 5 mirrors ─────────────
-        StageData(
-            stageNumber = 43, worldNumber = 5,
-            laserSource = src(1f, 0.5f, 180f),
-            mirrors = listOf(
-                mirror(1, 0.78f, 0.5f,  135f, 28f),
-                mirror(2, 0.78f, 0.75f,  45f, 28f),
-                mirror(3, 0.5f,  0.75f, 135f, 28f),
-                mirror(4, 0.5f,  0.5f,   45f, 22f, movable = false),
-                mirror(5, 0.28f, 0.5f,  135f, 28f)
-            ),
-            mosquitoes = listOf(
-                mqE(1, 0.28f, 0.28f, 2.5f, 0.10f),
-                mqC(2, 0.78f, 0.88f, 2.4f, 0.07f)
-            ),
-            obstacles = listOf(
-                wall(0.60f, 0.60f, 0.08f, 0.08f),
-                glass(0.36f, 0.62f, 0.08f, 0.08f)
+                mq(1, 0.25f, 0.58f),
+                mqE(2, 0.85f, 0.4f, speed = 2.0f, range = 0.08f)
             ),
             condition = StageCondition(
-                timeLimitSeconds = 48,
-                maxMovableMirrors = 4,
-                minReflections = 3
+                timeLimitSeconds = 40,
+                forbiddenZones = listOf(
+                    zone(0.35f, 0.10f, 0.55f, 0.60f),
+                    zone(0.75f, 0.55f, 0.95f, 0.90f)
+                )
             ),
+            worldTheme = WorldTheme.FACTORY
+        ),
+
+        // Stage 39: High speed assembly line
+        StageData(
+            stageNumber = 39, worldNumber = 4,
+            laserSource = src(0f, 0.2f, 0f),
+            mirrors = listOf(
+                mirror(1, 0.3f, 0.2f, startAngle = 75f, range = 30f),
+                mirror(2, 0.3f, 0.5f, startAngle = 75f, range = 30f),
+                mirror(3, 0.7f, 0.5f, startAngle = 75f, range = 30f),
+                mirror(4, 0.7f, 0.8f, startAngle = 100f, range = 30f)
+            ),
+            mosquitoes = listOf(
+                mqL(1, 0.5f, 0.5f, speed = 2.0f, range = 0.08f),
+                mqC(2, 0.4f, 0.8f, speed = 2.0f, range = 0.07f)
+            ),
+            obstacles = listOf(wall(0.42f, 0.05f, 0.10f, 0.35f)),
+            condition = StageCondition(
+                timeLimitSeconds = 35,
+                maxMovableMirrors = 3
+            ),
+            worldTheme = WorldTheme.FACTORY
+        ),
+
+        // Stage 40: World 4 Boss - Meltdown Alert (30s, 3 Mosquitoes, Hazard Zone)
+        StageData(
+            stageNumber = 40, worldNumber = 4,
+            laserSource = src(0f, 0.15f, 0f),
+            mirrors = listOf(
+                mirror(1, 0.25f, 0.15f, startAngle = 75f, range = 30f),
+                mirror(2, 0.25f, 0.50f, startAngle = 75f, range = 30f),
+                mirror(3, 0.65f, 0.50f, startAngle = 75f, range = 30f),
+                mirror(4, 0.65f, 0.80f, startAngle = 100f, range = 30f),
+                mirror(5, 0.30f, 0.80f, startAngle = 75f, range = 30f)
+            ),
+            mosquitoes = listOf(
+                mq(1, 0.25f, 0.32f),
+                mqL(2, 0.45f, 0.50f, speed = 1.8f, range = 0.08f),
+                mqE(3, 0.30f, 0.92f, speed = 2.2f, range = 0.08f)
+            ),
+            obstacles = listOf(wall(0.40f, 0.20f, 0.10f, 0.20f)),
+            condition = StageCondition(
+                timeLimitSeconds = 30,
+                maxMovableMirrors = 4,
+                minReflections = 3,
+                forbiddenZones = listOf(zone(0.75f, 0.10f, 0.95f, 0.60f))
+            ),
+            worldTheme = WorldTheme.FACTORY
+        ),
+
+        // ======================================================================
+        // WORLD 5 – VOLCANO (stages 41-50)
+        // Mechanics: Fast erratic enemies, tight angle ranges (15-25°), multi-conditions.
+        // ======================================================================
+
+        // Stage 41: Fast circular mosquito + tight angle
+        StageData(
+            stageNumber = 41, worldNumber = 5,
+            laserSource = src(0f, 0.35f, 0f),
+            mirrors = listOf(
+                mirror(1, 0.45f, 0.35f, startAngle = 65f, range = 25f),
+                mirror(2, 0.45f, 0.72f, startAngle = 65f, range = 25f)
+            ),
+            mosquitoes = listOf(mqC(1, 0.80f, 0.72f, speed = 2.4f, range = 0.07f)),
+            condition = StageCondition(timeLimitSeconds = 45, minReflections = 2),
             worldTheme = WorldTheme.VOLCANO
         ),
 
-        // ── Stage 44 – 45 seconds, forbidden zone + fast enemies ─────────────
+        // Stage 42: Two fast mosquitoes, 4 mirrors
+        StageData(
+            stageNumber = 42, worldNumber = 5,
+            laserSource = src(0.3f, 0f, 90f),
+            mirrors = listOf(
+                mirror(1, 0.3f, 0.25f, startAngle = 65f, range = 25f),
+                mirror(2, 0.7f, 0.25f, startAngle = 65f, range = 25f),
+                mirror(3, 0.7f, 0.65f, startAngle = 115f, range = 25f),
+                mirror(4, 0.3f, 0.65f, startAngle = 65f, range = 25f)
+            ),
+            mosquitoes = listOf(
+                mqC(1, 0.5f, 0.25f, speed = 2.5f, range = 0.06f),
+                mqL(2, 0.3f, 0.85f, speed = 2.2f, range = 0.08f)
+            ),
+            condition = StageCondition(timeLimitSeconds = 45, maxMovableMirrors = 3),
+            worldTheme = WorldTheme.VOLCANO
+        ),
+
+        // Stage 43: Magma chamber corridor
+        StageData(
+            stageNumber = 43, worldNumber = 5,
+            laserSource = src(1f, 0.3f, 180f),
+            mirrors = listOf(
+                mirror(1, 0.75f, 0.3f, startAngle = 115f, range = 25f),
+                mirror(2, 0.75f, 0.7f, startAngle = 65f, range = 25f),
+                mirror(3, 0.4f, 0.7f, startAngle = 115f, range = 25f),
+                mirror(4, 0.4f, 0.4f, startAngle = 65f, range = 0f, movable = false),
+                mirror(5, 0.15f, 0.4f, startAngle = 115f, range = 25f)
+            ),
+            mosquitoes = listOf(
+                mqE(1, 0.15f, 0.7f, speed = 2.4f, range = 0.08f),
+                mqC(2, 0.58f, 0.7f, speed = 2.2f, range = 0.07f)
+            ),
+            obstacles = listOf(wall(0.55f, 0.10f, 0.10f, 0.45f)),
+            condition = StageCondition(timeLimitSeconds = 40, minReflections = 3),
+            worldTheme = WorldTheme.VOLCANO
+        ),
+
+        // Stage 44: Lava pit hazard
         StageData(
             stageNumber = 44, worldNumber = 5,
             laserSource = src(0f, 0.5f, 0f),
             mirrors = listOf(
-                mirror(1, 0.25f, 0.5f,   45f, 25f),
-                mirror(2, 0.25f, 0.78f, 135f, 25f),
-                mirror(3, 0.58f, 0.78f,  45f, 25f),
-                mirror(4, 0.58f, 0.5f,  135f, 25f)
+                mirror(1, 0.25f, 0.5f, startAngle = 65f, range = 25f),
+                mirror(2, 0.25f, 0.8f, startAngle = 65f, range = 25f),
+                mirror(3, 0.65f, 0.8f, startAngle = 65f, range = 25f),
+                mirror(4, 0.65f, 0.5f, startAngle = 115f, range = 25f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.25f, 0.93f, 2.8f, 0.07f),
-                mqL(2, 0.82f, 0.5f,  2.6f, 0.09f)
+                mqC(1, 0.45f, 0.8f, speed = 2.6f, range = 0.06f),
+                mqL(2, 0.85f, 0.5f, speed = 2.4f, range = 0.08f)
             ),
-            obstacles = listOf(wall(0.38f, 0.60f, 0.08f, 0.08f)),
             condition = StageCondition(
-                timeLimitSeconds = 45,
-                forbiddenZones = listOf(zone(0.30f, 0.05f, 0.80f, 0.42f))
+                timeLimitSeconds = 38,
+                forbiddenZones = listOf(zone(0.35f, 0.10f, 0.85f, 0.40f))
             ),
             worldTheme = WorldTheme.VOLCANO
         ),
 
-        // ── Stage 45 – 43 seconds, 3 forbidden zones ──────────────────────────
+        // Stage 45: 5 Mirrors tight puzzle
         StageData(
             stageNumber = 45, worldNumber = 5,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0.2f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.25f,  45f, 25f),
-                mirror(2, 0.78f, 0.25f, 135f, 25f),
-                mirror(3, 0.78f, 0.58f,  45f, 25f),
-                mirror(4, 0.5f,  0.58f, 135f, 22f, movable = false),
-                mirror(5, 0.25f, 0.58f,  45f, 25f)
+                mirror(1, 0.2f, 0.3f, startAngle = 65f, range = 20f),
+                mirror(2, 0.6f, 0.3f, startAngle = 65f, range = 20f),
+                mirror(3, 0.6f, 0.65f, startAngle = 115f, range = 20f),
+                mirror(4, 0.2f, 0.65f, startAngle = 65f, range = 20f),
+                mirror(5, 0.2f, 0.88f, startAngle = 65f, range = 20f)
             ),
             mosquitoes = listOf(
-                mqL(1, 0.78f, 0.82f, 2.7f, 0.08f),
-                mqC(2, 0.25f, 0.82f, 2.5f, 0.07f),
-                mq(3, 0.92f, 0.58f)
+                mqE(1, 0.4f, 0.3f, speed = 2.5f, range = 0.08f),
+                mqC(2, 0.6f, 0.88f, speed = 2.5f, range = 0.07f)
             ),
-            obstacles = listOf(wall(0.60f, 0.38f, 0.08f, 0.08f)),
-            condition = StageCondition(
-                timeLimitSeconds = 43,
-                maxMovableMirrors = 4,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.42f, 0.20f),
-                    zone(0.60f, 0.05f, 0.95f, 0.20f),
-                    zone(0.40f, 0.68f, 0.60f, 0.80f)
-                )
-            ),
+            condition = StageCondition(timeLimitSeconds = 35, maxMovableMirrors = 4),
             worldTheme = WorldTheme.VOLCANO
         ),
 
-        // ── Stage 46 – 42 seconds, 6 mirrors, 3 fast mosquitoes ──────────────
+        // Stage 46: Triple hazard zone
         StageData(
             stageNumber = 46, worldNumber = 5,
-            laserSource = src(0f, 0.45f, 0f),
+            laserSource = src(0f, 0.2f, 0f),
             mirrors = listOf(
-                mirror(1, 0.18f, 0.45f,  45f, 22f),
-                mirror(2, 0.18f, 0.72f, 135f, 22f),
-                mirror(3, 0.40f, 0.72f,  45f, 22f),
-                mirror(4, 0.40f, 0.45f, 135f, 22f),
-                mirror(5, 0.62f, 0.45f,  45f, 22f),
-                mirror(6, 0.62f, 0.72f, 135f, 18f, movable = false)
+                mirror(1, 0.3f, 0.2f, startAngle = 65f, range = 20f),
+                mirror(2, 0.3f, 0.55f, startAngle = 65f, range = 20f),
+                mirror(3, 0.7f, 0.55f, startAngle = 65f, range = 20f),
+                mirror(4, 0.7f, 0.80f, startAngle = 115f, range = 20f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.18f, 0.90f, 2.9f, 0.07f),
-                mqE(2, 0.40f, 0.90f, 2.7f, 0.09f),
-                mqL(3, 0.88f, 0.45f, 2.9f, 0.08f)
-            ),
-            obstacles = listOf(
-                wall(0.28f, 0.32f, 0.08f, 0.08f),
-                wall(0.50f, 0.58f, 0.08f, 0.08f)
+                mqL(1, 0.5f, 0.55f, speed = 2.6f, range = 0.08f),
+                mqE(2, 0.4f, 0.80f, speed = 2.6f, range = 0.08f)
             ),
             condition = StageCondition(
-                timeLimitSeconds = 42,
-                maxMovableMirrors = 5,
-                minReflections = 4,
-                forbiddenZones = listOf(zone(0.05f, 0.05f, 0.95f, 0.32f))
+                timeLimitSeconds = 35,
+                forbiddenZones = listOf(
+                    zone(0.40f, 0.05f, 0.90f, 0.45f),
+                    zone(0.05f, 0.65f, 0.20f, 0.95f)
+                )
             ),
             worldTheme = WorldTheme.VOLCANO
         ),
 
-        // ── Stage 47 – 40 seconds, 6 mirrors, tight corridor ─────────────────
+        // Stage 47: 6 mirrors corridor
         StageData(
             stageNumber = 47, worldNumber = 5,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.15f, 0f),
             mirrors = listOf(
-                mirror(1, 0.22f, 0.5f,   45f, 20f),
-                mirror(2, 0.22f, 0.78f, 135f, 20f),
-                mirror(3, 0.50f, 0.78f,  45f, 20f),
-                mirror(4, 0.50f, 0.5f,  135f, 20f),
-                mirror(5, 0.75f, 0.5f,   45f, 20f),
-                mirror(6, 0.75f, 0.78f, 135f, 18f, movable = false)
+                mirror(1, 0.2f, 0.15f, startAngle = 65f, range = 20f),
+                mirror(2, 0.2f, 0.45f, startAngle = 65f, range = 20f),
+                mirror(3, 0.5f, 0.45f, startAngle = 65f, range = 20f),
+                mirror(4, 0.5f, 0.75f, startAngle = 115f, range = 20f),
+                mirror(5, 0.8f, 0.75f, startAngle = 65f, range = 20f),
+                mirror(6, 0.8f, 0.45f, startAngle = 115f, range = 20f)
             ),
             mosquitoes = listOf(
-                mqL(1, 0.22f, 0.93f, 2.9f, 0.08f),
-                mqC(2, 0.50f, 0.93f, 2.8f, 0.07f),
-                mqE(3, 0.92f, 0.78f, 2.7f, 0.10f)
+                mqC(1, 0.35f, 0.45f, speed = 2.5f, range = 0.06f),
+                mqE(2, 0.65f, 0.75f, speed = 2.6f, range = 0.08f),
+                mqL(3, 0.8f, 0.20f, speed = 2.5f, range = 0.08f)
             ),
-            obstacles = listOf(
-                wall(0.32f, 0.38f, 0.08f, 0.08f),
-                wall(0.60f, 0.62f, 0.08f, 0.08f),
-                glass(0.32f, 0.85f, 0.08f, 0.07f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 40,
-                maxMovableMirrors = 5,
-                forbiddenZones = listOf(zone(0.05f, 0.05f, 0.95f, 0.35f))
-            ),
+            condition = StageCondition(timeLimitSeconds = 32, maxMovableMirrors = 5),
             worldTheme = WorldTheme.VOLCANO
         ),
 
-        // ── Stage 48 – 38 seconds, all-moving, 4 forbidden zones ─────────────
+        // Stage 48: Extreme speed swarm
         StageData(
             stageNumber = 48, worldNumber = 5,
-            laserSource = src(1f, 0.5f, 180f),
+            laserSource = src(1f, 0.2f, 180f),
             mirrors = listOf(
-                mirror(1, 0.78f, 0.5f,  135f, 20f),
-                mirror(2, 0.78f, 0.75f,  45f, 20f),
-                mirror(3, 0.50f, 0.75f, 135f, 20f),
-                mirror(4, 0.50f, 0.5f,   45f, 20f),
-                mirror(5, 0.25f, 0.5f,  135f, 20f),
-                mirror(6, 0.25f, 0.75f,  45f, 18f, movable = false)
+                mirror(1, 0.75f, 0.2f, startAngle = 115f, range = 20f),
+                mirror(2, 0.75f, 0.5f, startAngle = 65f, range = 20f),
+                mirror(3, 0.4f, 0.5f, startAngle = 115f, range = 20f),
+                mirror(4, 0.4f, 0.8f, startAngle = 65f, range = 20f),
+                mirror(5, 0.15f, 0.8f, startAngle = 115f, range = 20f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.78f, 0.90f, 3.0f, 0.07f),
-                mqE(2, 0.50f, 0.90f, 2.8f, 0.09f),
-                mqL(3, 0.10f, 0.75f, 3.0f, 0.08f)
+                mqE(1, 0.58f, 0.5f, speed = 2.8f, range = 0.08f),
+                mqC(2, 0.28f, 0.8f, speed = 2.8f, range = 0.07f),
+                mqL(3, 0.15f, 0.5f, speed = 2.6f, range = 0.08f)
             ),
-            obstacles = listOf(
-                wall(0.60f, 0.35f, 0.08f, 0.10f),
-                wall(0.34f, 0.60f, 0.08f, 0.08f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 38,
-                maxMovableMirrors = 5,
-                minReflections = 4,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.30f),
-                    zone(0.35f, 0.32f, 0.65f, 0.45f)
-                )
-            ),
+            condition = StageCondition(timeLimitSeconds = 30, minReflections = 4),
             worldTheme = WorldTheme.VOLCANO
         ),
 
-        // ── Stage 49 – 35 seconds, 7 mirrors, extreme angles ─────────────────
+        // Stage 49: Volcano Core (7 mirrors, 3 fast enemies)
         StageData(
             stageNumber = 49, worldNumber = 5,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0.2f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.15f, 0.5f,   45f, 18f),
-                mirror(2, 0.15f, 0.72f, 135f, 18f),
-                mirror(3, 0.35f, 0.72f,  45f, 18f),
-                mirror(4, 0.35f, 0.5f,  135f, 18f),
-                mirror(5, 0.55f, 0.5f,   45f, 18f),
-                mirror(6, 0.55f, 0.72f, 135f, 18f),
-                mirror(7, 0.75f, 0.72f,  45f, 16f, movable = false)
+                mirror(1, 0.2f, 0.2f, startAngle = 65f, range = 18f),
+                mirror(2, 0.5f, 0.2f, startAngle = 65f, range = 18f),
+                mirror(3, 0.5f, 0.5f, startAngle = 115f, range = 18f),
+                mirror(4, 0.8f, 0.5f, startAngle = 65f, range = 18f),
+                mirror(5, 0.8f, 0.8f, startAngle = 65f, range = 18f),
+                mirror(6, 0.2f, 0.8f, startAngle = 115f, range = 18f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.15f, 0.90f, 3.0f, 0.06f),
-                mqE(2, 0.55f, 0.90f, 3.0f, 0.08f),
-                mqL(3, 0.92f, 0.72f, 3.0f, 0.07f)
+                mqC(1, 0.35f, 0.2f, speed = 2.8f, range = 0.06f),
+                mqE(2, 0.65f, 0.5f, speed = 2.8f, range = 0.08f),
+                mqL(3, 0.50f, 0.8f, speed = 2.8f, range = 0.08f)
             ),
-            obstacles = listOf(
-                wall(0.24f, 0.36f, 0.06f, 0.08f),
-                wall(0.44f, 0.58f, 0.06f, 0.08f),
-                glass(0.64f, 0.36f, 0.06f, 0.08f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 35,
-                maxMovableMirrors = 6,
-                minReflections = 5,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.30f),
-                    zone(0.20f, 0.42f, 0.50f, 0.52f)
-                )
-            ),
+            condition = StageCondition(timeLimitSeconds = 28, maxMovableMirrors = 5),
             worldTheme = WorldTheme.VOLCANO
         ),
 
-        // ── Stage 50 – Volcano boss: 30 seconds, 8 mirrors, 4 mosquitoes ──────
+        // Stage 50: World 5 Boss - Volcano Eruption (25s, 4 fast enemies, min 4 reflections)
         StageData(
             stageNumber = 50, worldNumber = 5,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0f, 0.15f, 0f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.15f, 135f, 18f),
-                mirror(2, 0.22f, 0.15f,  45f, 18f),
-                mirror(3, 0.22f, 0.42f, 135f, 18f),
-                mirror(4, 0.22f, 0.68f,  45f, 16f, movable = false),
-                mirror(5, 0.5f,  0.42f,  45f, 18f),
-                mirror(6, 0.5f,  0.68f, 135f, 16f, movable = false),
-                mirror(7, 0.75f, 0.42f, 135f, 18f),
-                mirror(8, 0.75f, 0.68f,  45f, 18f)
+                mirror(1, 0.25f, 0.15f, startAngle = 65f, range = 18f),
+                mirror(2, 0.25f, 0.45f, startAngle = 65f, range = 18f),
+                mirror(3, 0.55f, 0.45f, startAngle = 65f, range = 18f),
+                mirror(4, 0.55f, 0.75f, startAngle = 115f, range = 18f),
+                mirror(5, 0.85f, 0.75f, startAngle = 65f, range = 18f),
+                mirror(6, 0.85f, 0.45f, startAngle = 115f, range = 18f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.22f, 0.88f, 3.0f, 0.07f),
-                mqE(2, 0.50f, 0.88f, 3.0f, 0.08f),
-                mqL(3, 0.75f, 0.88f, 3.0f, 0.07f),
-                mqE(4, 0.92f, 0.42f, 2.8f, 0.09f)
-            ),
-            obstacles = listOf(
-                wall(0.34f, 0.28f, 0.06f, 0.08f),
-                wall(0.62f, 0.28f, 0.06f, 0.08f),
-                wall(0.34f, 0.52f, 0.06f, 0.08f),
-                glass(0.62f, 0.52f, 0.06f, 0.08f)
+                mq(1, 0.25f, 0.30f),
+                mqC(2, 0.40f, 0.45f, speed = 3.0f, range = 0.06f),
+                mqE(3, 0.70f, 0.75f, speed = 3.0f, range = 0.08f),
+                mqL(4, 0.85f, 0.20f, speed = 2.8f, range = 0.08f)
             ),
             condition = StageCondition(
-                timeLimitSeconds = 30,
-                maxMovableMirrors = 6,
-                minReflections = 5,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.10f),
-                    zone(0.30f, 0.30f, 0.70f, 0.38f)
-                )
+                timeLimitSeconds = 25,
+                maxMovableMirrors = 5,
+                minReflections = 4,
+                forbiddenZones = listOf(zone(0.35f, 0.10f, 0.75f, 0.35f))
             ),
             worldTheme = WorldTheme.VOLCANO
         ),
 
-        // ══════════════════════════════════════════════════════════════════════
-        //  WORLD 6 – SPACE  (stages 51-60)
-        //  Maximum complexity; stage 60 is the final boss.
-        // ══════════════════════════════════════════════════════════════════════
+        // ======================================================================
+        // WORLD 6 – SPACE (stages 51-60)
+        // Cosmic void, extreme multi-bounce labyrinths, fast swarms.
+        // ======================================================================
 
-        // ── Stage 51 – 45 seconds, 5 mirrors, 2 fast mosquitoes ──────────────
+        // Stage 51: Space Void intro
         StageData(
             stageNumber = 51, worldNumber = 6,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.3f, 0f),
             mirrors = listOf(
-                mirror(1, 0.20f, 0.5f,   45f, 20f),
-                mirror(2, 0.20f, 0.75f, 135f, 20f),
-                mirror(3, 0.50f, 0.75f,  45f, 20f),
-                mirror(4, 0.50f, 0.5f,  135f, 20f),
-                mirror(5, 0.75f, 0.5f,   45f, 20f)
+                mirror(1, 0.35f, 0.3f, startAngle = 65f, range = 20f),
+                mirror(2, 0.35f, 0.7f, startAngle = 65f, range = 20f),
+                mirror(3, 0.75f, 0.7f, startAngle = 65f, range = 20f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.20f, 0.92f, 3.0f, 0.07f),
-                mqE(2, 0.92f, 0.5f,  3.0f, 0.09f)
+                mqC(1, 0.55f, 0.7f, speed = 2.8f, range = 0.06f),
+                mqE(2, 0.75f, 0.88f, speed = 2.8f, range = 0.08f)
             ),
-            obstacles = listOf(
-                wall(0.32f, 0.38f, 0.08f, 0.08f),
-                wall(0.60f, 0.60f, 0.08f, 0.08f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 45,
-                maxMovableMirrors = 4,
-                minReflections = 4,
-                forbiddenZones = listOf(zone(0.05f, 0.05f, 0.95f, 0.35f))
-            ),
+            condition = StageCondition(timeLimitSeconds = 40),
             worldTheme = WorldTheme.SPACE
         ),
 
-        // ── Stage 52 ──────────────────────────────────────────────────────────
+        // Stage 52: Cosmic ray corridor
         StageData(
             stageNumber = 52, worldNumber = 6,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0.3f, 0f, 90f),
             mirrors = listOf(
-                mirror(1, 0.5f,  0.18f,  45f, 18f),
-                mirror(2, 0.78f, 0.18f, 135f, 18f),
-                mirror(3, 0.78f, 0.48f,  45f, 18f),
-                mirror(4, 0.5f,  0.48f, 135f, 18f),
-                mirror(5, 0.25f, 0.48f,  45f, 18f),
-                mirror(6, 0.25f, 0.75f, 135f, 16f, movable = false)
+                mirror(1, 0.3f, 0.25f, startAngle = 65f, range = 20f),
+                mirror(2, 0.7f, 0.25f, startAngle = 65f, range = 20f),
+                mirror(3, 0.7f, 0.6f, startAngle = 115f, range = 20f),
+                mirror(4, 0.3f, 0.6f, startAngle = 65f, range = 20f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.78f, 0.78f, 3.0f, 0.07f),
-                mqL(2, 0.50f, 0.85f, 3.0f, 0.08f),
-                mqE(3, 0.10f, 0.75f, 2.8f, 0.09f)
+                mqL(1, 0.5f, 0.25f, speed = 2.8f, range = 0.08f),
+                mqC(2, 0.5f, 0.6f, speed = 2.8f, range = 0.06f),
+                mqE(3, 0.3f, 0.85f, speed = 2.8f, range = 0.08f)
             ),
-            obstacles = listOf(
-                wall(0.60f, 0.32f, 0.08f, 0.08f),
-                wall(0.34f, 0.58f, 0.08f, 0.08f),
-                glass(0.34f, 0.30f, 0.08f, 0.08f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 42,
-                maxMovableMirrors = 5,
-                minReflections = 4,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.45f, 0.14f),
-                    zone(0.55f, 0.05f, 0.95f, 0.14f)
-                )
-            ),
+            condition = StageCondition(timeLimitSeconds = 35, minReflections = 3),
             worldTheme = WorldTheme.SPACE
         ),
 
-        // ── Stage 53 ──────────────────────────────────────────────────────────
+        // Stage 53: Nebula maze (5 mirrors)
         StageData(
             stageNumber = 53, worldNumber = 6,
-            laserSource = src(1f, 0.45f, 180f),
+            laserSource = src(0f, 0.2f, 0f),
             mirrors = listOf(
-                mirror(1, 0.80f, 0.45f, 135f, 18f),
-                mirror(2, 0.80f, 0.70f,  45f, 18f),
-                mirror(3, 0.58f, 0.70f, 135f, 18f),
-                mirror(4, 0.58f, 0.45f,  45f, 18f),
-                mirror(5, 0.36f, 0.45f, 135f, 18f),
-                mirror(6, 0.36f, 0.70f,  45f, 18f),
-                mirror(7, 0.15f, 0.70f, 135f, 16f, movable = false)
+                mirror(1, 0.25f, 0.2f, startAngle = 65f, range = 18f),
+                mirror(2, 0.25f, 0.5f, startAngle = 65f, range = 18f),
+                mirror(3, 0.6f, 0.5f, startAngle = 65f, range = 18f),
+                mirror(4, 0.6f, 0.8f, startAngle = 115f, range = 18f),
+                mirror(5, 0.85f, 0.8f, startAngle = 65f, range = 18f)
             ),
             mosquitoes = listOf(
-                mqE(1, 0.80f, 0.88f, 3.0f, 0.08f),
-                mqC(2, 0.58f, 0.88f, 3.0f, 0.07f),
-                mqL(3, 0.08f, 0.70f, 3.0f, 0.08f)
+                mqC(1, 0.42f, 0.5f, speed = 2.8f, range = 0.06f),
+                mqE(2, 0.72f, 0.8f, speed = 3.0f, range = 0.08f)
             ),
-            obstacles = listOf(
-                wall(0.68f, 0.32f, 0.06f, 0.08f),
-                wall(0.46f, 0.55f, 0.06f, 0.08f),
-                wall(0.24f, 0.32f, 0.06f, 0.08f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 40,
-                maxMovableMirrors = 6,
-                minReflections = 5,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.32f),
-                    zone(0.25f, 0.42f, 0.50f, 0.48f)
-                )
-            ),
+            condition = StageCondition(timeLimitSeconds = 35, maxMovableMirrors = 4),
             worldTheme = WorldTheme.SPACE
         ),
 
-        // ── Stage 54 ──────────────────────────────────────────────────────────
+        // Stage 54: Black hole hazard zone
         StageData(
             stageNumber = 54, worldNumber = 6,
-            laserSource = src(0f, 0.5f, 0f),
+            laserSource = src(0f, 0.4f, 0f),
             mirrors = listOf(
-                mirror(1,  0.14f, 0.5f,   45f, 16f),
-                mirror(2,  0.14f, 0.72f, 135f, 16f),
-                mirror(3,  0.32f, 0.72f,  45f, 16f),
-                mirror(4,  0.32f, 0.5f,  135f, 16f),
-                mirror(5,  0.50f, 0.5f,   45f, 16f),
-                mirror(6,  0.50f, 0.72f, 135f, 16f),
-                mirror(7,  0.68f, 0.72f,  45f, 16f),
-                mirror(8,  0.68f, 0.5f,  135f, 14f, movable = false)
+                mirror(1, 0.3f, 0.4f, startAngle = 65f, range = 18f),
+                mirror(2, 0.3f, 0.8f, startAngle = 65f, range = 18f),
+                mirror(3, 0.7f, 0.8f, startAngle = 65f, range = 18f),
+                mirror(4, 0.7f, 0.4f, startAngle = 115f, range = 18f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.14f, 0.90f, 3.0f, 0.06f),
-                mqE(2, 0.50f, 0.90f, 3.0f, 0.08f),
-                mqL(3, 0.88f, 0.5f,  3.0f, 0.07f)
-            ),
-            obstacles = listOf(
-                wall(0.22f, 0.36f, 0.06f, 0.08f),
-                wall(0.40f, 0.58f, 0.06f, 0.08f),
-                wall(0.58f, 0.36f, 0.06f, 0.08f),
-                glass(0.22f, 0.80f, 0.06f, 0.08f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 38,
-                maxMovableMirrors = 7,
-                minReflections = 6,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.35f),
-                    zone(0.35f, 0.38f, 0.65f, 0.46f)
-                )
-            ),
-            worldTheme = WorldTheme.SPACE
-        ),
-
-        // ── Stage 55 ──────────────────────────────────────────────────────────
-        StageData(
-            stageNumber = 55, worldNumber = 6,
-            laserSource = src(0.5f, 0f, 90f),
-            mirrors = listOf(
-                mirror(1, 0.5f,  0.14f, 135f, 15f),
-                mirror(2, 0.25f, 0.14f,  45f, 15f),
-                mirror(3, 0.25f, 0.38f, 135f, 15f),
-                mirror(4, 0.25f, 0.62f,  45f, 15f),
-                mirror(5, 0.5f,  0.38f,  45f, 15f),
-                mirror(6, 0.5f,  0.62f, 135f, 14f, movable = false),
-                mirror(7, 0.75f, 0.38f, 135f, 15f),
-                mirror(8, 0.75f, 0.62f,  45f, 15f),
-                mirror(9, 0.5f,  0.82f, 135f, 14f, movable = false)
-            ),
-            mosquitoes = listOf(
-                mqC(1, 0.25f, 0.82f, 3.2f, 0.06f),
-                mqE(2, 0.50f, 0.93f, 3.0f, 0.07f),
-                mqL(3, 0.75f, 0.82f, 3.2f, 0.07f),
-                mqE(4, 0.92f, 0.38f, 3.0f, 0.09f)
-            ),
-            obstacles = listOf(
-                wall(0.35f, 0.25f, 0.07f, 0.08f),
-                wall(0.60f, 0.25f, 0.07f, 0.08f),
-                wall(0.35f, 0.48f, 0.07f, 0.08f),
-                glass(0.60f, 0.48f, 0.07f, 0.08f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 35,
-                maxMovableMirrors = 7,
-                minReflections = 6,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.45f, 0.10f),
-                    zone(0.55f, 0.05f, 0.95f, 0.10f),
-                    zone(0.35f, 0.30f, 0.65f, 0.38f)
-                )
-            ),
-            worldTheme = WorldTheme.SPACE
-        ),
-
-        // ── Stage 56 ──────────────────────────────────────────────────────────
-        StageData(
-            stageNumber = 56, worldNumber = 6,
-            laserSource = src(0f, 0.5f, 0f),
-            mirrors = listOf(
-                mirror(1,  0.10f, 0.5f,   45f, 14f),
-                mirror(2,  0.10f, 0.70f, 135f, 14f),
-                mirror(3,  0.28f, 0.70f,  45f, 14f),
-                mirror(4,  0.28f, 0.5f,  135f, 14f),
-                mirror(5,  0.46f, 0.5f,   45f, 14f),
-                mirror(6,  0.46f, 0.70f, 135f, 14f),
-                mirror(7,  0.64f, 0.70f,  45f, 14f),
-                mirror(8,  0.64f, 0.5f,  135f, 14f),
-                mirror(9,  0.82f, 0.5f,   45f, 14f),
-                mirror(10, 0.82f, 0.70f, 135f, 12f, movable = false)
-            ),
-            mosquitoes = listOf(
-                mqC(1, 0.10f, 0.88f, 3.2f, 0.06f),
-                mqE(2, 0.46f, 0.88f, 3.0f, 0.07f),
-                mqL(3, 0.82f, 0.88f, 3.2f, 0.06f),
-                mqE(4, 0.94f, 0.5f,  3.0f, 0.08f)
-            ),
-            obstacles = listOf(
-                wall(0.18f, 0.36f, 0.06f, 0.08f),
-                wall(0.36f, 0.56f, 0.06f, 0.08f),
-                wall(0.54f, 0.36f, 0.06f, 0.08f),
-                wall(0.72f, 0.56f, 0.06f, 0.08f)
+                mqC(1, 0.5f, 0.8f, speed = 3.0f, range = 0.06f),
+                mqE(2, 0.85f, 0.4f, speed = 3.0f, range = 0.08f)
             ),
             condition = StageCondition(
                 timeLimitSeconds = 32,
-                maxMovableMirrors = 9,
-                minReflections = 7,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.35f),
-                    zone(0.20f, 0.42f, 0.80f, 0.50f)
-                )
+                forbiddenZones = listOf(zone(0.40f, 0.10f, 0.85f, 0.55f)) // Black hole singularity
             ),
             worldTheme = WorldTheme.SPACE
         ),
 
-        // ── Stage 57 ──────────────────────────────────────────────────────────
+        // Stage 55: 6 Mirrors space station grid
+        StageData(
+            stageNumber = 55, worldNumber = 6,
+            laserSource = src(0.2f, 0f, 90f),
+            mirrors = listOf(
+                mirror(1, 0.2f, 0.2f, startAngle = 65f, range = 16f),
+                mirror(2, 0.5f, 0.2f, startAngle = 65f, range = 16f),
+                mirror(3, 0.5f, 0.5f, startAngle = 115f, range = 16f),
+                mirror(4, 0.8f, 0.5f, startAngle = 65f, range = 16f),
+                mirror(5, 0.8f, 0.8f, startAngle = 65f, range = 16f),
+                mirror(6, 0.2f, 0.8f, startAngle = 115f, range = 16f)
+            ),
+            mosquitoes = listOf(
+                mqC(1, 0.35f, 0.2f, speed = 3.0f, range = 0.06f),
+                mqE(2, 0.65f, 0.5f, speed = 3.0f, range = 0.08f),
+                mqL(3, 0.50f, 0.8f, speed = 3.0f, range = 0.08f)
+            ),
+            condition = StageCondition(timeLimitSeconds = 30, minReflections = 4),
+            worldTheme = WorldTheme.SPACE
+        ),
+
+        // Stage 56: Galaxy core (7 mirrors, 3 erratic swarmers)
+        StageData(
+            stageNumber = 56, worldNumber = 6,
+            laserSource = src(0f, 0.15f, 0f),
+            mirrors = listOf(
+                mirror(1, 0.2f, 0.15f, startAngle = 65f, range = 16f),
+                mirror(2, 0.2f, 0.45f, startAngle = 65f, range = 16f),
+                mirror(3, 0.5f, 0.45f, startAngle = 65f, range = 16f),
+                mirror(4, 0.5f, 0.75f, startAngle = 115f, range = 16f),
+                mirror(5, 0.8f, 0.75f, startAngle = 65f, range = 16f),
+                mirror(6, 0.8f, 0.45f, startAngle = 115f, range = 16f),
+                mirror(7, 0.5f, 0.15f, startAngle = 65f, range = 16f)
+            ),
+            mosquitoes = listOf(
+                mqE(1, 0.35f, 0.45f, speed = 3.0f, range = 0.08f),
+                mqC(2, 0.65f, 0.75f, speed = 3.0f, range = 0.06f),
+                mqE(3, 0.80f, 0.25f, speed = 3.0f, range = 0.08f)
+            ),
+            condition = StageCondition(timeLimitSeconds = 28, maxMovableMirrors = 6),
+            worldTheme = WorldTheme.SPACE
+        ),
+
+        // Stage 57: Quantum rift (Dual black holes)
         StageData(
             stageNumber = 57, worldNumber = 6,
-            laserSource = src(0.5f, 0f, 90f),
-            mirrors = listOf(
-                mirror(1,  0.5f,  0.12f, 135f, 14f),
-                mirror(2,  0.22f, 0.12f,  45f, 14f),
-                mirror(3,  0.22f, 0.35f, 135f, 14f),
-                mirror(4,  0.22f, 0.58f,  45f, 14f),
-                mirror(5,  0.22f, 0.78f, 135f, 12f, movable = false),
-                mirror(6,  0.5f,  0.35f,  45f, 14f),
-                mirror(7,  0.5f,  0.58f, 135f, 12f, movable = false),
-                mirror(8,  0.75f, 0.35f, 135f, 14f),
-                mirror(9,  0.75f, 0.58f,  45f, 14f),
-                mirror(10, 0.75f, 0.78f, 135f, 14f),
-                mirror(11, 0.5f,  0.78f,  45f, 14f)
-            ),
-            mosquitoes = listOf(
-                mqC(1, 0.22f, 0.93f, 3.2f, 0.06f),
-                mqE(2, 0.5f,  0.93f, 3.0f, 0.07f),
-                mqL(3, 0.75f, 0.93f, 3.2f, 0.06f),
-                mqE(4, 0.08f, 0.58f, 3.0f, 0.08f),
-                mqC(5, 0.92f, 0.35f, 3.0f, 0.07f)
-            ),
-            obstacles = listOf(
-                wall(0.34f, 0.22f, 0.06f, 0.06f),
-                wall(0.62f, 0.22f, 0.06f, 0.06f),
-                wall(0.34f, 0.44f, 0.06f, 0.06f),
-                glass(0.62f, 0.44f, 0.06f, 0.06f),
-                glass(0.34f, 0.66f, 0.06f, 0.06f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 30,
-                maxMovableMirrors = 9,
-                minReflections = 8,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.08f),
-                    zone(0.05f, 0.22f, 0.18f, 0.50f),
-                    zone(0.82f, 0.22f, 0.95f, 0.50f)
-                )
-            ),
-            worldTheme = WorldTheme.SPACE
-        ),
-
-        // ── Stage 58 ──────────────────────────────────────────────────────────
-        StageData(
-            stageNumber = 58, worldNumber = 6,
             laserSource = src(0f, 0.5f, 0f),
             mirrors = listOf(
-                mirror(1,  0.09f, 0.5f,   45f, 13f),
-                mirror(2,  0.09f, 0.68f, 135f, 13f),
-                mirror(3,  0.24f, 0.68f,  45f, 13f),
-                mirror(4,  0.24f, 0.5f,  135f, 13f),
-                mirror(5,  0.39f, 0.5f,   45f, 13f),
-                mirror(6,  0.39f, 0.68f, 135f, 13f),
-                mirror(7,  0.54f, 0.68f,  45f, 13f),
-                mirror(8,  0.54f, 0.5f,  135f, 13f),
-                mirror(9,  0.69f, 0.5f,   45f, 13f),
-                mirror(10, 0.69f, 0.68f, 135f, 13f),
-                mirror(11, 0.84f, 0.68f,  45f, 12f, movable = false),
-                mirror(12, 0.84f, 0.5f,  135f, 12f, movable = false)
+                mirror(1, 0.2f, 0.5f, startAngle = 65f, range = 15f),
+                mirror(2, 0.2f, 0.8f, startAngle = 65f, range = 15f),
+                mirror(3, 0.5f, 0.8f, startAngle = 65f, range = 15f),
+                mirror(4, 0.5f, 0.5f, startAngle = 115f, range = 15f),
+                mirror(5, 0.8f, 0.5f, startAngle = 65f, range = 15f),
+                mirror(6, 0.8f, 0.8f, startAngle = 115f, range = 15f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.09f, 0.86f, 3.2f, 0.06f),
-                mqL(2, 0.39f, 0.86f, 3.2f, 0.06f),
-                mqE(3, 0.69f, 0.86f, 3.0f, 0.07f),
-                mqC(4, 0.94f, 0.68f, 3.2f, 0.06f),
-                mqE(5, 0.94f, 0.5f,  3.0f, 0.08f)
-            ),
-            obstacles = listOf(
-                wall(0.16f, 0.36f, 0.06f, 0.08f),
-                wall(0.31f, 0.54f, 0.06f, 0.08f),
-                wall(0.46f, 0.36f, 0.06f, 0.08f),
-                wall(0.61f, 0.54f, 0.06f, 0.08f),
-                glass(0.16f, 0.72f, 0.06f, 0.08f)
+                mqC(1, 0.35f, 0.8f, speed = 3.2f, range = 0.06f),
+                mqE(2, 0.65f, 0.5f, speed = 3.2f, range = 0.08f),
+                mqL(3, 0.8f, 0.93f, speed = 3.0f, range = 0.08f)
             ),
             condition = StageCondition(
-                timeLimitSeconds = 27,
-                maxMovableMirrors = 10,
-                minReflections = 9,
+                timeLimitSeconds = 25,
                 forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.35f),
-                    zone(0.05f, 0.38f, 0.07f, 0.45f)
+                    zone(0.30f, 0.10f, 0.70f, 0.35f),
+                    zone(0.05f, 0.60f, 0.15f, 0.95f)
                 )
             ),
             worldTheme = WorldTheme.SPACE
         ),
 
-        // ── Stage 59 ──────────────────────────────────────────────────────────
+        // Stage 58: Hyper-speed orbital laser
+        StageData(
+            stageNumber = 58, worldNumber = 6,
+            laserSource = src(1f, 0.2f, 180f),
+            mirrors = listOf(
+                mirror(1, 0.8f, 0.2f, startAngle = 115f, range = 15f),
+                mirror(2, 0.8f, 0.5f, startAngle = 65f, range = 15f),
+                mirror(3, 0.5f, 0.5f, startAngle = 115f, range = 15f),
+                mirror(4, 0.5f, 0.8f, startAngle = 65f, range = 15f),
+                mirror(5, 0.2f, 0.8f, startAngle = 115f, range = 15f),
+                mirror(6, 0.2f, 0.5f, startAngle = 65f, range = 15f)
+            ),
+            mosquitoes = listOf(
+                mqC(1, 0.65f, 0.5f, speed = 3.2f, range = 0.06f),
+                mqE(2, 0.35f, 0.8f, speed = 3.2f, range = 0.08f),
+                mqL(3, 0.2f, 0.3f, speed = 3.0f, range = 0.08f)
+            ),
+            condition = StageCondition(timeLimitSeconds = 25, minReflections = 5),
+            worldTheme = WorldTheme.SPACE
+        ),
+
+        // Stage 59: Cosmic Labyrinth (8 mirrors, 4 mosquitoes)
         StageData(
             stageNumber = 59, worldNumber = 6,
-            laserSource = src(0.5f, 0f, 90f),
+            laserSource = src(0.2f, 0f, 90f),
             mirrors = listOf(
-                mirror(1,  0.5f,  0.10f, 135f, 12f),
-                mirror(2,  0.20f, 0.10f,  45f, 12f),
-                mirror(3,  0.20f, 0.30f, 135f, 12f),
-                mirror(4,  0.20f, 0.52f,  45f, 12f),
-                mirror(5,  0.20f, 0.72f, 135f, 11f, movable = false),
-                mirror(6,  0.40f, 0.30f,  45f, 12f),
-                mirror(7,  0.40f, 0.52f, 135f, 12f),
-                mirror(8,  0.40f, 0.72f,  45f, 11f, movable = false),
-                mirror(9,  0.62f, 0.30f, 135f, 12f),
-                mirror(10, 0.62f, 0.52f,  45f, 12f),
-                mirror(11, 0.62f, 0.72f, 135f, 12f),
-                mirror(12, 0.80f, 0.52f,  45f, 12f),
-                mirror(13, 0.80f, 0.72f, 135f, 11f, movable = false)
+                mirror(1, 0.2f, 0.2f, startAngle = 65f, range = 15f),
+                mirror(2, 0.5f, 0.2f, startAngle = 65f, range = 15f),
+                mirror(3, 0.5f, 0.45f, startAngle = 115f, range = 15f),
+                mirror(4, 0.8f, 0.45f, startAngle = 65f, range = 15f),
+                mirror(5, 0.8f, 0.7f, startAngle = 65f, range = 15f),
+                mirror(6, 0.5f, 0.7f, startAngle = 115f, range = 15f),
+                mirror(7, 0.5f, 0.9f, startAngle = 65f, range = 15f),
+                mirror(8, 0.2f, 0.9f, startAngle = 115f, range = 15f)
             ),
             mosquitoes = listOf(
-                mqC(1, 0.20f, 0.90f, 3.2f, 0.05f),
-                mqE(2, 0.40f, 0.90f, 3.0f, 0.06f),
-                mqL(3, 0.62f, 0.90f, 3.2f, 0.06f),
-                mqC(4, 0.08f, 0.52f, 3.0f, 0.06f),
-                mqE(5, 0.92f, 0.72f, 3.0f, 0.07f),
-                mqL(6, 0.92f, 0.30f, 3.2f, 0.06f)
+                mqC(1, 0.35f, 0.2f, speed = 3.2f, range = 0.06f),
+                mqE(2, 0.65f, 0.45f, speed = 3.2f, range = 0.08f),
+                mqL(3, 0.65f, 0.7f, speed = 3.0f, range = 0.08f),
+                mqE(4, 0.35f, 0.9f, speed = 3.2f, range = 0.08f)
             ),
-            obstacles = listOf(
-                wall(0.30f, 0.18f, 0.06f, 0.07f),
-                wall(0.52f, 0.18f, 0.06f, 0.07f),
-                wall(0.30f, 0.40f, 0.06f, 0.07f),
-                wall(0.52f, 0.40f, 0.06f, 0.07f),
-                glass(0.30f, 0.60f, 0.06f, 0.07f),
-                glass(0.52f, 0.60f, 0.06f, 0.07f)
-            ),
-            condition = StageCondition(
-                timeLimitSeconds = 23,
-                maxMovableMirrors = 10,
-                minReflections = 10,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.05f, 0.95f, 0.06f),
-                    zone(0.05f, 0.18f, 0.15f, 0.78f),
-                    zone(0.85f, 0.18f, 0.95f, 0.78f),
-                    zone(0.30f, 0.26f, 0.70f, 0.34f)
-                )
-            ),
+            condition = StageCondition(timeLimitSeconds = 22, maxMovableMirrors = 6),
             worldTheme = WorldTheme.SPACE
         ),
 
-        // ── Stage 60 – FINAL BOSS ─────────────────────────────────────────────
-        // 20-second time limit. 15 mirrors form a snaking path from the bottom-
-        // centre laser up through the whole arena, distributing the beam to cover
-        // 20 mosquitoes across the upper two-thirds of the screen.
+        // Stage 60: GRAND FINAL BOSS - Galactic Mosquito Overlord
+        // Laser fires UP from bottom-center src(0.5f, 1f, 270f).
+        // 8 movable mirrors distribute laser beam across cosmic arena to destroy 5 boss swarmers.
         StageData(
             stageNumber = 60, worldNumber = 6,
-            laserSource = src(0.5f, 1f, 270f),            // shoots UP from bottom-centre
+            laserSource = src(0.5f, 1f, 270f), // Shoots straight UP (270°)
             mirrors = listOf(
-                mirror(1,  0.50f, 0.80f,  45f, 10f),      // up→right
-                mirror(2,  0.80f, 0.80f, 135f, 10f),      // right→up
-                mirror(3,  0.80f, 0.60f,  45f, 10f),      // up→right (edge bounce)
-                mirror(4,  0.20f, 0.60f, 135f, 10f),      // right→up (secondary)
-                mirror(5,  0.20f, 0.42f,  45f, 10f),      // up→right
-                mirror(6,  0.50f, 0.42f, 135f, 10f),      // right→up
-                mirror(7,  0.65f, 0.42f,  45f, 10f),      // up→right
-                mirror(8,  0.90f, 0.42f, 135f, 10f),      // right→up
-                mirror(9,  0.90f, 0.28f,  45f, 10f),      // up→right (wall side)
-                mirror(10, 0.10f, 0.28f, 135f, 10f),      // left side distributor
-                mirror(11, 0.35f, 0.28f,  45f, 10f),
-                mirror(12, 0.60f, 0.28f, 135f, 10f),
-                mirror(13, 0.60f, 0.14f,  45f, 10f),
-                mirror(14, 0.80f, 0.14f, 135f, 10f),
-                mirror(15, 0.35f, 0.14f, 135f,  8f, movable = false)
+                mirror(1, 0.5f, 0.75f, startAngle = 65f, range = 15f),  // sol=45° (up -> left)
+                mirror(2, 0.2f, 0.75f, startAngle = 115f, range = 15f), // sol=135° (left -> up)
+                mirror(3, 0.2f, 0.45f, startAngle = 65f, range = 15f),  // sol=45° (up -> left)
+                mirror(4, 0.8f, 0.45f, startAngle = 115f, range = 15f), // sol=135° (left -> down/up)
+                mirror(5, 0.8f, 0.2f, startAngle = 65f, range = 15f),   // sol=45° (up -> left)
+                mirror(6, 0.5f, 0.2f, startAngle = 115f, range = 15f),  // sol=135° (left -> down)
+                mirror(7, 0.5f, 0.45f, startAngle = 65f, range = 15f),  // sol=45°
+                mirror(8, 0.2f, 0.2f, startAngle = 65f, range = 15f)    // sol=45°
             ),
             mosquitoes = listOf(
-                // Top row (y≈0.08) – six erratic/circular
-                mqE(1,  0.10f, 0.08f, 3.5f, 0.06f),
-                mqE(2,  0.25f, 0.08f, 3.5f, 0.06f),
-                mqC(3,  0.40f, 0.08f, 3.2f, 0.05f),
-                mqE(4,  0.55f, 0.08f, 3.5f, 0.06f),
-                mqC(5,  0.70f, 0.08f, 3.2f, 0.05f),
-                mqE(6,  0.85f, 0.08f, 3.5f, 0.06f),
-                // Second row (y≈0.18) – five mixed
-                mqL(7,  0.10f, 0.18f, 3.4f, 0.06f),
-                mqE(8,  0.30f, 0.18f, 3.3f, 0.07f),
-                mqC(9,  0.50f, 0.18f, 3.2f, 0.06f),
-                mqE(10, 0.70f, 0.18f, 3.3f, 0.07f),
-                mqL(11, 0.90f, 0.18f, 3.4f, 0.06f),
-                // Third row (y≈0.33) – five mixed
-                mqE(12, 0.08f, 0.33f, 3.3f, 0.07f),
-                mqC(13, 0.28f, 0.33f, 3.2f, 0.06f),
-                mqE(14, 0.48f, 0.33f, 3.3f, 0.07f),
-                mqC(15, 0.68f, 0.33f, 3.2f, 0.06f),
-                mqE(16, 0.88f, 0.33f, 3.3f, 0.07f),
-                // Lower scattered (y≈0.50) – four
-                mqE(17, 0.15f, 0.50f, 3.2f, 0.08f),
-                mqC(18, 0.40f, 0.50f, 3.0f, 0.07f),
-                mqE(19, 0.65f, 0.50f, 3.2f, 0.08f),
-                mqC(20, 0.90f, 0.50f, 3.0f, 0.07f)
+                mqE(1, 0.35f, 0.75f, speed = 3.5f, range = 0.06f),
+                mqC(2, 0.2f, 0.60f, speed = 3.2f, range = 0.05f),
+                mqE(3, 0.5f, 0.45f, speed = 3.5f, range = 0.06f),
+                mqC(4, 0.65f, 0.2f, speed = 3.2f, range = 0.05f),
+                mqE(5, 0.35f, 0.2f, speed = 3.5f, range = 0.06f)
             ),
             obstacles = listOf(
-                wall(0.60f, 0.70f, 0.08f, 0.08f),
-                wall(0.14f, 0.52f, 0.08f, 0.08f),
-                wall(0.40f, 0.52f, 0.08f, 0.08f),
-                glass(0.14f, 0.70f, 0.08f, 0.08f),
-                glass(0.38f, 0.34f, 0.08f, 0.06f),
-                glass(0.56f, 0.34f, 0.08f, 0.06f)
+                glass(0.40f, 0.30f, 0.20f, 0.10f),
+                wall(0.35f, 0.60f, 0.10f, 0.10f)
             ),
             condition = StageCondition(
-                timeLimitSeconds = 20,
-                maxMovableMirrors = 14,
-                minReflections = 10,
-                forbiddenZones = listOf(
-                    zone(0.05f, 0.60f, 0.45f, 0.68f),
-                    zone(0.55f, 0.60f, 0.95f, 0.68f),
-                    zone(0.35f, 0.85f, 0.65f, 1.00f)
-                )
+                timeLimitSeconds = 25,
+                maxMovableMirrors = 8,
+                minReflections = 5
             ),
             worldTheme = WorldTheme.SPACE
         )
     )
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Public API
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Returns the [StageData] for the given 1-based [number].
-     * @throws IndexOutOfBoundsException if [number] is not in 1..60.
-     */
     fun getStage(number: Int): StageData = stages[number - 1]
 
-    /**
-     * Returns all ten stages that belong to the given [world] (1–6).
-     */
     fun getWorldStages(world: Int): List<StageData> =
         stages.filter { it.worldNumber == world }
 
-    /** Total number of stages in the game (always 60). */
     val stageCount: Int get() = stages.size
 }

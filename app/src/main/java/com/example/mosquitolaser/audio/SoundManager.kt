@@ -54,35 +54,43 @@ class SoundManager(private val context: Context) {
     fun playStageClear() {
         // Ascending arpeggio
         thread {
-            val tones = listOf(
-                ToneGenerator.TONE_DTMF_1 to 100L,
-                ToneGenerator.TONE_DTMF_6 to 400L,
-                ToneGenerator.TONE_DTMF_9 to 400L,
-                ToneGenerator.TONE_DTMF_D to 400L
-            )
-            val gen = ToneGenerator(AudioManager.STREAM_MUSIC, (sfxVolume * 100).toInt())
-            for ((tone, dur) in tones) {
-                gen.startTone(tone, dur.toInt())
-                Thread.sleep(dur)
+            try {
+                val tones = listOf(
+                    ToneGenerator.TONE_DTMF_1 to 100L,
+                    ToneGenerator.TONE_DTMF_6 to 400L,
+                    ToneGenerator.TONE_DTMF_9 to 400L,
+                    ToneGenerator.TONE_DTMF_D to 400L
+                )
+                val gen = ToneGenerator(AudioManager.STREAM_MUSIC, (sfxVolume * 100).toInt().coerceIn(0, 100))
+                for ((tone, dur) in tones) {
+                    gen.startTone(tone, dur.toInt())
+                    Thread.sleep(dur)
+                }
+                gen.release()
+            } catch (e: Exception) {
+                // Ignore audio errors
             }
-            gen.release()
         }
     }
 
     fun playStageFail() {
         // Descending tone
         thread {
-            val tones = listOf(
-                ToneGenerator.TONE_DTMF_8 to 150L,
-                ToneGenerator.TONE_DTMF_3 to 150L,
-                ToneGenerator.TONE_DTMF_1 to 300L
-            )
-            val gen = ToneGenerator(AudioManager.STREAM_MUSIC, (sfxVolume * 100).toInt())
-            for ((tone, dur) in tones) {
-                gen.startTone(tone, dur.toInt())
-                Thread.sleep(dur)
+            try {
+                val tones = listOf(
+                    ToneGenerator.TONE_DTMF_8 to 150L,
+                    ToneGenerator.TONE_DTMF_3 to 150L,
+                    ToneGenerator.TONE_DTMF_1 to 300L
+                )
+                val gen = ToneGenerator(AudioManager.STREAM_MUSIC, (sfxVolume * 100).toInt().coerceIn(0, 100))
+                for ((tone, dur) in tones) {
+                    gen.startTone(tone, dur.toInt())
+                    Thread.sleep(dur)
+                }
+                gen.release()
+            } catch (e: Exception) {
+                // Ignore audio errors
             }
-            gen.release()
         }
     }
 
