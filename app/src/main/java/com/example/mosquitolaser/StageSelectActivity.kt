@@ -182,9 +182,17 @@ class StageSelectActivity : AppCompatActivity() {
     }
 
     private fun buildStageButton(stageNum: Int, isCleared: Boolean, isUnlocked: Boolean, accent: Int): View {
+        val stars = prefs.getInt("stars_$stageNum", 0)
+
         return TextView(this).apply {
-            text = if (!isUnlocked) "🔒" else stageNum.toString()
-            textSize = 18f
+            text = if (!isUnlocked) {
+                "🔒"
+            } else if (stars > 0) {
+                "$stageNum\n${"★".repeat(stars)}"
+            } else {
+                stageNum.toString()
+            }
+            textSize = if (stars > 0) 14f else 18f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(when {
@@ -192,12 +200,12 @@ class StageSelectActivity : AppCompatActivity() {
                 isCleared -> Color.WHITE
                 else -> Color.argb(200, 255, 255, 255)
             })
-            setPadding(0, 20, 0, 20)
+            setPadding(0, 14, 0, 14)
 
             val bgColor = when {
                 !isUnlocked -> Color.argb(60, 50, 50, 70)
                 isCleared -> accent
-                else -> Color.argb(100, accent.red(), accent.green(), accent.blue())
+                else -> Color.argb(100, Color.red(accent), Color.green(accent), Color.blue(accent))
             }
 
             background = object : android.graphics.drawable.Drawable() {
@@ -205,15 +213,6 @@ class StageSelectActivity : AppCompatActivity() {
                     val r = RectF(0f, 0f, bounds.width().toFloat(), bounds.height().toFloat())
                     val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bgColor }
                     canvas.drawRoundRect(r, 12f, 12f, p)
-                    if (isCleared) {
-                        // Star icon for cleared
-                        val starPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                            color = Color.argb(180, 255, 230, 0)
-                            textSize = 16f
-                            textAlign = Paint.Align.RIGHT
-                        }
-                        canvas.drawText("⭐", r.right - 4f, r.top + 18f, starPaint)
-                    }
                     val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                         style = Paint.Style.STROKE
                         strokeWidth = 1.5f

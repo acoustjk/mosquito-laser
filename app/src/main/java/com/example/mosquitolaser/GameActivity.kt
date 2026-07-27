@@ -83,11 +83,23 @@ class GameActivity : AppCompatActivity() {
         if (overlayShown) return
         overlayShown = true
 
-        // Save progress
+        val engine = gameView.engine
+        val stars = engine.calculateStars()
+        val totalScore = engine.totalScore
+
+        // Save progress, high score & stars
         prefs.edit().apply {
             putBoolean("cleared_$stageNumber", true)
+
             val maxCleared = prefs.getInt("max_stage_cleared", 0)
             if (stageNumber > maxCleared) putInt("max_stage_cleared", stageNumber)
+
+            val prevStars = prefs.getInt("stars_$stageNumber", 0)
+            if (stars > prevStars) putInt("stars_$stageNumber", stars)
+
+            val prevScore = prefs.getInt("score_$stageNumber", 0)
+            if (totalScore > prevScore) putInt("score_$stageNumber", totalScore)
+
             putInt("last_stage", minOf(stageNumber + 1, 60))
             apply()
         }
@@ -130,7 +142,7 @@ class GameActivity : AppCompatActivity() {
         // Title
         val titleText = TextView(this).apply {
             text = if (success) "🎉 스테이지 클리어!" else "💥 실패!"
-            textSize = 36f
+            textSize = 34f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(if (success) Color.argb(255, 100, 255, 150) else Color.argb(255, 255, 100, 100))
             gravity = Gravity.CENTER
@@ -138,33 +150,69 @@ class GameActivity : AppCompatActivity() {
         }
         card.addView(titleText)
 
-        // Reason
-        val reasonText = TextView(this).apply {
-            text = when (reason) {
-                GameEngine.FailReason.TIME_UP -> "⏱ 시간 초과!"
-                GameEngine.FailReason.FORBIDDEN_ZONE -> "🚫 금지 구역 통과!"
-                null -> ""
-            }
-            textSize = 18f
-            setTextColor(Color.argb(200, 255, 200, 100))
-            gravity = Gravity.CENTER
-            setPadding(0, 8, 0, 0)
-        }
-        card.addView(reasonText)
+        val engine = gameView.engine
 
-        // Stats
-        val statsText = TextView(this).apply {
-            val engine = gameView.engine
-            text = buildString {
-                append("\n🦟 ${engine.mosquitoesKilled} / ${engine.totalMosquitoes} 격추")
-                if (gameView.stage.condition.hasMinReflections()) {
-                    append("\n↗ ${engine.reflectionCount} 회 반사")
+        if (success) {
+            val starsEarned = engine.calculateStars()
+            val starBanner = TextView(this).apply {
+                text = when (starsEarned) {
+                    3 -> "⭐ ⭐ ⭐"
+                    2 -> "⭐ ⭐ ⎯"
+                    else -> "⭐ ⎯ ⎯"
                 }
+                textSize = 36f
+                gravity = Gravity.CENTER
+                setPadding(0, 12, 0, 8)
+                setShadowLayer(16f, 0f, 0f, Color.YELLOW)
             }
-            textSize = 16f
+            card.addView(starBanner)
+
+            // Score breakdown text
+            val scoreText = TextView(this).apply {
+                val base = engine.baseStageScore
+                val speed = engine.speedBonus
+                val eff = engine.efficiencyBonus
+                val total = engine.totalScore
+
+                text = buildString {
+                    append("기본 점수: +$base\n")
+                    append("속도 보너스: +$speed\n")
+                    append("전략/효율 보너스: +$eff\n")
+                    append("\n🏆 최종 점수: ${String.format("%,d", total)}")
+                }
+                textSize = 15f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.argb(240, 255, 240, 150))
+                gravity = Gravity.CENTER
+                setPadding(0, 8, 0, 16)
+            }
+            card.addView(scoreText)
+        }
+
+        // Reason (if failed)
+        if (reason != null) {
+            val reasonText = TextView(this).apply {
+                text = when (reason) {
+                    GameEngine.FailReason.TIME_UP -> "⏱ 시간 초과!"
+                    GameEngine.FailReason.FORBIDDEN_ZONE -> "🚫 금지 구역 통과!"
+                }
+                textSize = 18f
+                setTextColor(Color.argb(200, 255, 200, 100))
+                gravity = Gravity.CENTER
+                setPadding(0, 8, 0, 12)
+            }
+            card.addView(reasonText)
+        }
+
+        // Stats summary
+        val statsText = TextView(this).apply {
+            text = buildString {
+                append("🦟 ${engine.mosquitoesKilled} / ${engine.totalMosquitoes} 격추 | 🪞 ${engine.mirrorsMoved}회 이동")
+            }
+            textSize = 14f
             setTextColor(Color.argb(180, 200, 200, 200))
             gravity = Gravity.CENTER
-            setPadding(0, 12, 0, 24)
+            setPadding(0, 4, 0, 24)
         }
         card.addView(statsText)
 

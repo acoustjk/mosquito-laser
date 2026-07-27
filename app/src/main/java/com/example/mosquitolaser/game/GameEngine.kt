@@ -31,6 +31,9 @@ class GameEngine(val stage: StageData) {
         stage.condition.timeLimitSeconds * 1000L else Long.MAX_VALUE
         private set
 
+    var elapsedTimeMs: Long = 0L
+        private set
+
     // Score
     var reflectionCount: Int = 0
         private set
@@ -57,6 +60,7 @@ class GameEngine(val stage: StageData) {
 
     fun update(deltaMs: Long) {
         if (state != GameState.PLAYING) return
+        elapsedTimeMs += deltaMs
 
         // Update timer
         if (stage.condition.hasTimeLimit()) {
@@ -73,6 +77,46 @@ class GameEngine(val stage: StageData) {
 
         // Recalculate laser
         recalculateLaser()
+    }
+
+    // ── Score & Star Calculation System ─────────────────────────────────────
+
+    val baseStageScore: Int
+        get() = stage.mosquitoes.size * 1000 + stage.mirrors.size * 300
+
+    val speedBonus: Int
+        get() = if (stage.condition.hasTimeLimit()) {
+            ((remainingTimeMs / 1000f) * 150).toInt().coerceAtLeast(0)
+        } else {
+            (3500 - (elapsedTimeMs / 1000f) * 100).toInt().coerceAtLeast(0)
+        }
+
+    val movableMirrorsCount: Int
+        get() = stage.mirrors.count { it.isMovable }
+
+    val unusedMirrorsCount: Int
+        get() = (movableMirrorsCount - mirrorsMoved).coerceAtLeast(0)
+
+    val efficiencyBonus: Int
+        get() {
+            val moveEfficiencyScore = unusedMirrorsCount * 500
+            val reflectionBonus = reflectionCount * 250
+            return moveEfficiencyScore + reflectionBonus
+        }
+
+    val totalScore: Int
+        get() = baseStageScore + speedBonus + efficiencyBonus
+
+    fun calculateStars(): Int {
+        val total = totalScore
+        val target3Star = baseStageScore + 1200
+        val target2Star = baseStageScore + 400
+
+        return when {
+            total >= target3Star || (unusedMirrorsCount > 0 && elapsedTimeMs <= 25_000L) -> 3
+            total >= target2Star || mirrorsMoved <= movableMirrorsCount -> 2
+            else -> 1
+        }
     }
 
     private fun recalculateLaser() {

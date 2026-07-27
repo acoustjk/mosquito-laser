@@ -739,10 +739,20 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
         // Mosquito count
         val killed = engine.mosquitoesKilled
         val total = engine.totalMosquitoes
-        hudPaint.textSize = 36f
+        hudPaint.textSize = 34f
         hudPaint.textAlign = Paint.Align.CENTER
         hudPaint.color = if (killed == total && total > 0) Color.GREEN else Color.WHITE
-        canvas.drawText("🦟 $killed / $total", w / 2f, 50f, hudPaint)
+        canvas.drawText("🦟 $killed / $total", w * 0.42f, 45f, hudPaint)
+
+        // Live score
+        val currentScore = engine.totalScore
+        val scorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.YELLOW
+            textSize = 24f
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText("🏆 ${String.format("%,d", currentScore)}", w * 0.42f, 78f, scorePaint)
         hudPaint.textAlign = Paint.Align.LEFT
 
         // Timer
@@ -754,11 +764,11 @@ class GameView(context: Context, val stage: StageData, val soundManager: SoundMa
                 if (blink) Color.RED else Color.argb(200, 255, 100, 100)
             } else Color.argb(220, 255, 220, 100)
             timerPaint.textAlign = Paint.Align.RIGHT
-            timerPaint.textSize = if (urgency) 56f else 44f
-            canvas.drawText(String.format("%02d", secs), w - 20f, 55f, timerPaint)
-            timerPaint.textSize = 22f
+            timerPaint.textSize = if (urgency) 50f else 40f
+            canvas.drawText(String.format("%02d", secs), w - 20f, 50f, timerPaint)
+            timerPaint.textSize = 20f
             timerPaint.color = Color.argb(180, 200, 200, 200)
-            canvas.drawText("SEC", w - 20f, 82f, timerPaint)
+            canvas.drawText("SEC", w - 20f, 75f, timerPaint)
         }
 
         // Reflections indicator
